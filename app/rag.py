@@ -1,6 +1,8 @@
 import re
+from dataclasses import dataclass
 
 from db import get_conn, embedding_dim, vector_order_by
+from intent import detect_intent, detect_service, load_aliases
 from llm import chat, chat_stream, embed_one
 from rank_bm25 import BM25Okapi
 from tokenize_ko import tokenize
@@ -8,30 +10,47 @@ from tokenize_ko import tokenize
 bm25 = None
 bm25_corpus = []
 EMBED_DIM = 0
-# 청크 본문 -> (source, service). 검색 결과에 출처를 붙이기 위해 들고 있는다.
+# 청크 본문 -> (source, "카테고리/서비스", doc_type). 검색 결과에 출처를 붙이기 위해 들고 있는다.
 doc_meta = {}
 TOP_K = 5
 
 # 리랭킹 프롬프트에 넣을 문서당 최대 글자 수. 후보 20건이면 약 14,000자.
 RERANK_DOC_CHARS = 700
 
+CANDIDATES = 20     # 벡터·BM25 각각 가져올 개수
+RERANK_KEEP = 12    # 점수 보정 후 리랭킹에 넘길 개수
+BOOST_BOTH = 1.2
+BOOST_CONSOLE = 1.5
+BOOST_SERVICE = 1.3
+
+ALIASES: dict[str, str] = {}
+
+
+@dataclass
+class Candidate:
+    content: str
+    source_path: str
+    service: str       # "카테고리/서비스"
+    doc_type: str
+    score: float
+
+
 def build_bm25():
-    global bm25, bm25_corpus, EMBED_DIM
+    global bm25, bm25_corpus, EMBED_DIM, ALIASES
 
     conn = get_conn()
     EMBED_DIM = embedding_dim(conn) or 0
     cur = conn.cursor()
 
-    cur.execute("SELECT content, source_path, service FROM documents")
+    cur.execute("SELECT content, source_path, service, category, doc_type FROM documents")
     rows = cur.fetchall()
 
     bm25_corpus = [r[0] for r in rows]
-    for content, source, service in rows:
-        doc_meta[content] = (source, service)
+    for content, source, service, category, doc_type in rows:
+        doc_meta[content] = (source, f"{category}/{service}", doc_type)
 
-    tokenized = [tokenize(doc) for doc in bm25_corpus]
-
-    bm25 = BM25Okapi(tokenized)
+    bm25 = BM25Okapi([tokenize(doc) for doc in bm25_corpus])
+    ALIASES = load_aliases()
 
     cur.close()
     conn.close()
@@ -40,8 +59,15 @@ def build_bm25():
 
 
 def get_meta(content):
-    """청크 본문으로 (source, service) 를 되찾는다."""
-    return doc_meta.get(content, ("(출처 미상)", "unknown"))
+    """청크 본문으로 (source_path, '카테고리/서비스') 를 되찾는다."""
+    meta = doc_meta.get(content)
+    return (meta[0], meta[1]) if meta else ("(출처 미상)", "unknown")
+
+
+def _candidate(content) -> Candidate:
+    source, service, doc_type = doc_meta.get(content, ("(출처 미상)", "unknown", "other"))
+    return Candidate(content=content, source_path=source, service=service, doc_type=doc_type, score=0.0)
+
 
 def embed_query(text):
     # 검색 질의는 input_type="query" 로 임베딩해야 적재 문서(passage)와 맞물린다.
@@ -51,46 +77,61 @@ def to_pgvector(vec):
     return "[" + ",".join(map(str, vec)) + "]"
 
 def search_docs(query, service=None):
-    candidates = hybrid_search(query, top_k=10)
-    final_docs = rerank(query, candidates, top_k=TOP_K)
-    return final_docs
+    intent = detect_intent(query)
+    svc = service or detect_service(query, ALIASES)
+    candidates = hybrid_search(query, intent=intent, service=svc)
+    return rerank(query, [c.content for c in candidates], top_k=TOP_K)
 
 
-def hybrid_search(query, top_k=10):
+def combine_scores(vector_hits, bm25_hits, intent, service, keep=RERANK_KEEP):
+    """벡터·BM25 결과를 하나의 점수로 합친다. 필터가 아니라 가중치만 준다."""
+    max_bm25 = max((s for _, s in bm25_hits), default=0.0)
+    vec = {c.content: (c, sim) for c, sim in vector_hits}
+    kw = {c.content: (c, (s / max_bm25 if max_bm25 > 0 else 0.0)) for c, s in bm25_hits}
+
+    merged: list[Candidate] = []
+    for content in list(dict.fromkeys(list(vec) + list(kw))):
+        cand = (vec.get(content) or kw.get(content))[0]
+        base = max(vec.get(content, (None, 0.0))[1], kw.get(content, (None, 0.0))[1])
+        score = base
+        if content in vec and content in kw:
+            score *= BOOST_BOTH
+        if intent == "console" and cand.doc_type == "console":
+            score *= BOOST_CONSOLE
+        if service and cand.service == service:
+            score *= BOOST_SERVICE
+        merged.append(Candidate(cand.content, cand.source_path, cand.service, cand.doc_type, score))
+
+    merged.sort(key=lambda c: c.score, reverse=True)
+    return merged[:keep]
+
+
+def hybrid_search(query, intent="general", service=None, top_k=CANDIDATES, keep=RERANK_KEEP):
     conn = get_conn()
     cur = conn.cursor()
 
-    # 🔥 vector 검색
-    q_emb = embed_query(query)
-    q_vec = to_pgvector(q_emb)
-
+    q_vec = to_pgvector(embed_query(query))
     cur.execute(f"""
-    SELECT content, source_path, service
+    SELECT content, source_path, service, category, doc_type,
+           1 - ({vector_order_by(EMBED_DIM)}) AS similarity
       FROM documents
      ORDER BY {vector_order_by(EMBED_DIM)}
      LIMIT %s;
-    """, (q_vec, top_k))
+    """, (q_vec, q_vec, top_k))
 
-    rows = cur.fetchall()
-    vector_docs = [r[0] for r in rows]
-    for content, source, service in rows:
-        doc_meta.setdefault(content, (source, service))
-
-    # 🔥 BM25 검색
-    tokenized_query = tokenize(query)
-    scores = bm25.get_scores(tokenized_query)
-
-    bm25_top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-    bm25_docs = [bm25_corpus[i] for i in bm25_top_idx]
+    vector_hits = []
+    for content, source, svc, category, doc_type, sim in cur.fetchall():
+        doc_meta.setdefault(content, (source, f"{category}/{svc}", doc_type))
+        vector_hits.append((_candidate(content), float(sim)))
 
     cur.close()
     conn.close()
 
-    # 🔥 합치기 — set() 은 순서를 잃는다. 리랭킹이 실패했을 때 되돌아갈 순서가
-    # 의미 있도록 벡터 결과를 앞에 두고 순서를 유지한 채 중복만 뺀다.
-    combined = list(dict.fromkeys(vector_docs + bm25_docs))
+    scores = bm25.get_scores(tokenize(query))
+    top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    bm25_hits = [(_candidate(bm25_corpus[i]), float(scores[i])) for i in top_idx if scores[i] > 0]
 
-    return combined
+    return combine_scores(vector_hits, bm25_hits, intent, service, keep)
 
 def parse_scores(text, n):
     """응답에서 마지막 숫자 배열을 찾아 길이가 n 이면 반환한다."""

@@ -181,13 +181,18 @@ if question:
                 t0 = time.time()
 
                 search_q = rag.retrieval_query(question, history)
-                status.update(label="1/3 하이브리드 검색 (벡터 + BM25)")
-                docs = rag.hybrid_search(search_q, top_k=candidates)
+                intent = rag.detect_intent(question)
+                # 후속 질문("그럼 삭제는?")은 직전 턴의 서비스를 이어받는다 (스펙 4-1).
+                service = rag.detect_service(search_q, rag.ALIASES, fallback=st.session_state.get("last_service"))
+                st.session_state.last_service = service
+                status.update(label=f"1/3 하이브리드 검색 (벡터 + BM25) · {intent} · {service or '서비스 미상'}")
+                candidates_found = rag.hybrid_search(search_q, intent=intent, service=service, top_k=candidates)
+                docs = [c.content for c in candidates_found]
 
                 status.update(label=f"2/3 관련도 평가 ({len(docs)}건)")
                 docs = rag.rerank(search_q, docs, top_k=top_k)
 
-                label = f"3/3 답변 생성 · 검색 {time.time() - t0:.1f}초"
+                label = f"3/3 답변 생성 · {intent} · {service or '서비스 미상'} · 검색 {time.time() - t0:.1f}초"
                 if search_q != question:
                     label += " · 이전 질문과 함께 검색"
                 status.update(label=label, state="complete")
