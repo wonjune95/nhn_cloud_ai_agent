@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 
 import yaml
 
@@ -19,6 +20,25 @@ CONSOLE_HINTS = (
 )
 # 절차 신호가 있어도 개념·API·요금 질문이면 general 로 되돌리는 신호.
 GENERAL_OVERRIDES = ("차이", "api", "파라미터", "요금", "비용", "기준값", "유효기간", "릴리스", "지원 여부", "sla", "제한", "몇 개")
+
+_ASCII = re.compile(r"^[a-z0-9 ._-]+$")
+
+
+def _alias_hits(q: str, aliases: dict[str, str]) -> list[str]:
+    """Find matching aliases in question, with word boundaries for ASCII-only aliases.
+
+    영문 약칭은 단어 경계로만 매칭한다 ("nat" 이 "nato" 안에서 잡히지 않게).
+    """
+    hits = []
+    for alias in aliases:
+        if _ASCII.match(alias):
+            # ASCII-only aliases require word boundaries
+            if re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", q):
+                hits.append(alias)
+        elif alias in q:
+            # Hangul aliases use substring matching (particles attach directly)
+            hits.append(alias)
+    return hits
 
 
 def detect_intent(question: str) -> str:
@@ -41,6 +61,8 @@ def load_aliases(generated_path: str | None = None, manual_path: str | None = No
     aliases: dict[str, str] = {}
     for path in (generated_path or GENERATED_ALIASES, manual_path or MANUAL_ALIASES):
         for service, names in _read_yaml(path).items():
+            if not isinstance(names, list):
+                continue
             for name in names or []:
                 key = " ".join(str(name).lower().split())
                 if key:
@@ -50,7 +72,7 @@ def load_aliases(generated_path: str | None = None, manual_path: str | None = No
 
 def detect_service(question: str, aliases: dict[str, str], fallback: str | None = None) -> str | None:
     q = " ".join(question.lower().split())
-    hits = [alias for alias in aliases if alias in q]
+    hits = _alias_hits(q, aliases)
     if not hits:
         return fallback
     return aliases[max(hits, key=len)]

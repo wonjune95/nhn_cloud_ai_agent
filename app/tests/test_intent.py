@@ -60,3 +60,24 @@ def test_service_match_is_case_insensitive_and_korean():
 def test_no_match_returns_fallback():
     assert detect_service("요금 문의", ALIASES) is None
     assert detect_service("그럼 삭제는?", ALIASES, fallback="Network/VPC") == "Network/VPC"
+
+
+def test_ascii_alias_requires_word_boundary():
+    aliases = {"nat": "Network/NAT Gateway", "acl": "Network/Network ACL", "vpc": "Network/VPC"}
+    assert detect_service("NATO 동맹국 목록", aliases) is None
+    assert detect_service("miracle 성능 개선", aliases) is None
+    assert detect_service("NAT 게이트웨이 만들기", aliases) == "Network/NAT Gateway"
+    assert detect_service("vpc에 서브넷 추가", aliases) == "Network/VPC"
+    assert detect_service("my-vpc-1 설정", aliases) == "Network/VPC"
+
+
+def test_korean_alias_matches_with_particles():
+    aliases = {"서브넷": "Network/VPC"}
+    assert detect_service("서브넷을 만들고 싶어", aliases) == "Network/VPC"
+
+
+def test_load_aliases_skips_non_list_values(tmp_path):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("Network/VPC: VPC\nNetwork/LB:\n- LB\n", encoding="utf-8")
+    aliases = load_aliases(str(bad), str(tmp_path / "none.yaml"))
+    assert aliases == {"lb": "Network/LB"}
