@@ -2,7 +2,8 @@
 
 메뉴(GNB)에서 모든 문서 링크를 모은 뒤, 페이지 본문(section.page__content-wrapper)만
 '카테고리/서비스/문서명.html' 로 저장한다. 경로는 본문 첫 <h2>의 브레드크럼으로 정한다.
-이미지는 같은 폴더의 images/ 에 원본 파일명으로 받고, 결과는 manifest.json 에 기록한다.
+이미지는 같은 폴더의 images/<문서명>/ 에 원본 파일명으로 받고(문서마다 폴더를 나눠
+서로 다른 문서의 같은 파일명이 섞이지 않게 한다), 결과는 manifest.json 에 기록한다.
 
     python crawlling/crawl.py                       # 전체 (이미 ok 인 페이지는 건너뜀)
     python crawlling/crawl.py --categories Network,Bill
@@ -96,10 +97,16 @@ def fetch_section(driver, url: str, sleep: float):
     return soup.select_one(CONTENT_SELECTOR)
 
 
-def download_images(section, doc_dir: str, page_url: str) -> tuple[int, int]:
-    """본문의 <img> 를 doc_dir/images/ 에 받고 src 를 상대경로로 바꾼다. (성공, 실패) 수를 돌려준다."""
-    img_dir = os.path.join(doc_dir, "images")
-    os.makedirs(img_dir, exist_ok=True)
+def download_images(section, doc_dir: str, page_url: str, doc_name: str, refresh: bool = False) -> tuple[int, int]:
+    """본문의 <img> 를 doc_dir/images/{doc_name}/ 에 받고 src 를 상대경로로 바꾼다.
+
+    images/ 는 서비스 폴더 안 모든 문서가 공유하므로 문서마다 하위 폴더를 따로 둬,
+    서로 다른 문서가 같은 파일명을 쓸 때 스크린샷이 뒤섞이는 것을 막는다.
+    refresh=True 면 파일이 이미 있어도 다시 받는다(기본은 있으면 건너뜀).
+    (성공, 실패) 수를 돌려준다.
+    """
+    img_dir = os.path.join(doc_dir, "images", doc_name)
+    dir_made = False
 
     ok = missing = 0
     name_to_url: dict[str, str] = {}
@@ -117,10 +124,13 @@ def download_images(section, doc_dir: str, page_url: str) -> tuple[int, int]:
         name_to_url[name] = url
 
         dest = os.path.join(img_dir, name)
-        if not os.path.exists(dest):
+        if refresh or not os.path.exists(dest):
             try:
                 res = requests.get(url, timeout=IMAGE_TIMEOUT)
                 res.raise_for_status()
+                if not dir_made:
+                    os.makedirs(img_dir, exist_ok=True)
+                    dir_made = True
                 with open(dest, "wb") as f:
                     f.write(res.content)
             except Exception as e:
@@ -130,7 +140,7 @@ def download_images(section, doc_dir: str, page_url: str) -> tuple[int, int]:
                 missing += 1
                 continue
 
-        img["src"] = f"./images/{name}"
+        img["src"] = f"./images/{doc_name}/{name}"
         ok += 1
 
     return ok, missing
@@ -163,7 +173,8 @@ def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> st
     doc_dir = os.path.join(save_dir, os.path.dirname(rel))
     os.makedirs(doc_dir, exist_ok=True)
 
-    ok, missing = download_images(section, doc_dir, task["url"])
+    doc_name = os.path.splitext(os.path.basename(rel))[0]
+    ok, missing = download_images(section, doc_dir, task["url"], doc_name, refresh=args.changed or args.force)
 
     with open(os.path.join(save_dir, rel), "w", encoding="utf-8") as f:
         f.write(section.prettify())
