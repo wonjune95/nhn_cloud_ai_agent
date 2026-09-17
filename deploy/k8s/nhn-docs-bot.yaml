@@ -1,0 +1,145 @@
+# NHN Cloud 콘솔 안내 챗봇 — 쿠버네티스 배포 (네임스페이스 nhn-docs-bot)
+#
+# 미리 만들어 둘 것 (git 에 넣지 않는다):
+#   kubectl -n nhn-docs-bot create secret generic llm --from-literal=NVIDIA_API_KEY=...
+#   kubectl -n nhn-docs-bot create secret docker-registry regcred ...   (또는 기존 풀 시크릿 복사)
+#
+# 이미지 태그는 배포 시 `kubectl set image` 또는 sed 로 바꾼다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nhn-docs-bot
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pgdata
+  namespace: nhn-docs-bot
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: sc-nas-cicd
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: docs
+  namespace: nhn-docs-bot
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: sc-nas-cicd
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  namespace: nhn-docs-bot
+spec:
+  selector:
+    app: pgvector
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pgvector
+  namespace: nhn-docs-bot
+spec:
+  serviceName: db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgvector
+  template:
+    metadata:
+      labels:
+        app: pgvector
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          env:
+            - { name: POSTGRES_DB, value: ragdb }
+            - { name: POSTGRES_USER, value: devops }
+            - { name: POSTGRES_PASSWORD, value: devops }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "devops", "-d", "ragdb"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 2Gi }
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: pgdata
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  namespace: nhn-docs-bot
+spec:
+  selector:
+    app: ui
+  ports:
+    - port: 8501
+      targetPort: 8501
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: nhn-docs-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ui
+  template:
+    metadata:
+      labels:
+        app: ui
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: ui
+          image: harbor.114-110-181-178.nip.io/nnd/nhn-docs-bot:latest
+          env:
+            - { name: DB_HOST, value: db }
+            - { name: DOCS_DIR, value: /docs }
+            - name: NVIDIA_API_KEY
+              valueFrom:
+                secretKeyRef: { name: llm, key: NVIDIA_API_KEY }
+          ports:
+            - containerPort: 8501
+          readinessProbe:
+            httpGet: { path: /_stcore/health, port: 8501 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 2Gi }
+          volumeMounts:
+            - name: docs
+              mountPath: /docs
+              readOnly: true
+      volumes:
+        - name: docs
+          persistentVolumeClaim:
+            claimName: docs
