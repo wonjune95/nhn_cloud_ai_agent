@@ -110,3 +110,20 @@ def test_questions_table_exists(conn):
     cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = 'questions'")
     assert cur.fetchone() is not None
     cur.close()
+
+
+def test_prune_removes_rows_for_deleted_files(docs_dir, conn):
+    import ingest, os
+
+    assert ingest.run(["--docs-dir", docs_dir, "--rebuild"]) == 0
+    # 두 번째 문서를 추가 적재한 뒤 파일을 지우면, 다음 전체 실행이 그 행을 정리한다
+    extra = os.path.join(docs_dir, "Network", "VPC", "개요.html")
+    with open(extra, "w", encoding="utf-8") as f:
+        f.write("<section><h2>Network &gt; VPC &gt; 개요</h2><h3>소개</h3><p>VPC 개요 본문</p></section>")
+    assert ingest.run(["--docs-dir", docs_dir]) == 0
+    assert len(rows(conn, "Network/VPC/개요.html")) == 1
+
+    os.remove(extra)
+    assert ingest.run(["--docs-dir", docs_dir]) == 0
+    assert rows(conn, "Network/VPC/개요.html") == []
+    assert len(rows(conn, "Network/VPC/콘솔 사용 가이드.html")) == 2   # 남아 있는 문서는 그대로
