@@ -120,6 +120,15 @@ def test_image_in_table_cell_uses_cell_text_as_caption():
     assert c.images[0].caption == "로그인 화면"
 
 
+def test_caption_is_normalized_to_one_line():
+    html = ('<section><h3>A</h3><table><tr><th>이름</th><th>값</th></tr>'
+            '<tr><td>a</td><td>1</td></tr></table><img src="./images/t.png"></section>')
+    c = chunk_html(html, "t", "C/S")[0]
+    assert "\n" not in c.images[0].caption
+    assert c.images[0].caption == "이름 | 값 이름: a | 값: 1"
+    assert "[스크린샷 1: 이름 | 값 이름: a | 값: 1]" in c.content
+
+
 def test_first_image_of_new_section_is_captioned_by_its_heading():
     html = ('<section><h3>이전 절</h3><p>이전 문장</p>'
             '<h3>새 절</h3><p><img src="./images/a.png"/></p><p>본문</p></section>')

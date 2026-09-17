@@ -89,6 +89,7 @@ def _image(img, caption: str, doc_rel_dir: str) -> Image:
         path = src
     else:
         path = f"{doc_rel_dir}/{src}"
+    caption = " ".join(caption.split())
     return Image(path=path, caption=caption, alt=img.get("alt") or "")
 
 
