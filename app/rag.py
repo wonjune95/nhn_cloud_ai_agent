@@ -1,11 +1,12 @@
 import re
 
-from db import get_conn
+from db import get_conn, embedding_dim, vector_order_by
 from llm import chat, chat_stream, embed_one
 from rank_bm25 import BM25Okapi
 
 bm25 = None
 bm25_corpus = []
+EMBED_DIM = 0
 # 청크 본문 -> (source, service). 검색 결과에 출처를 붙이기 위해 들고 있는다.
 doc_meta = {}
 TOP_K = 5
@@ -14,9 +15,10 @@ TOP_K = 5
 RERANK_DOC_CHARS = 700
 
 def build_bm25():
-    global bm25, bm25_corpus
+    global bm25, bm25_corpus, EMBED_DIM
 
     conn = get_conn()
+    EMBED_DIM = embedding_dim(conn) or 0
     cur = conn.cursor()
 
     cur.execute("SELECT content, source_path, service FROM documents")
@@ -61,10 +63,10 @@ def hybrid_search(query, top_k=10):
     q_emb = embed_query(query)
     q_vec = to_pgvector(q_emb)
 
-    cur.execute("""
+    cur.execute(f"""
     SELECT content, source_path, service
       FROM documents
-     ORDER BY embedding <=> %s::vector
+     ORDER BY {vector_order_by(EMBED_DIM)}
      LIMIT %s;
     """, (q_vec, top_k))
 

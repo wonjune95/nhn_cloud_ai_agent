@@ -46,6 +46,27 @@ def _embedding_dim(cur) -> int | None:
     return row[0]
 
 
+def embedding_dim(conn) -> int | None:
+    """documents.embedding 의 선언 차원. 테이블이 없으면 None."""
+    cur = conn.cursor()
+    try:
+        if not _table_exists(cur, "documents"):
+            return None
+        return _embedding_dim(cur)
+    finally:
+        cur.close()
+
+
+HALFVEC_THRESHOLD = 2000   # pgvector 의 vector HNSW 상한. 넘으면 halfvec 표현식 인덱스를 쓴다.
+
+
+def vector_order_by(dim: int) -> str:
+    """벡터 검색 ORDER BY 식. 인덱스를 만든 표현식과 똑같아야 인덱스를 탄다."""
+    if dim > HALFVEC_THRESHOLD:
+        return f"(embedding::halfvec({dim})) <=> %s::halfvec({dim})"
+    return "embedding <=> %s::vector"
+
+
 def init_schema(conn, dim: int, rebuild: bool = False) -> None:
     """documents / questions 테이블과 인덱스를 만든다.
 
@@ -86,16 +107,22 @@ def init_schema(conn, dim: int, rebuild: bool = False) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS documents_service_doc_type ON documents (service, doc_type);")
     cur.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents (source_path);")
 
-    # HNSW 는 pgvector 0.5 이상. 구버전이면 인덱스 없이 순차 스캔으로 동작한다.
+    # vector 타입 HNSW 는 2000차원까지. 그 이상은 halfvec 표현식 인덱스(pgvector 0.7+).
     cur.execute("SAVEPOINT hnsw;")
     try:
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS documents_embedding_hnsw "
-            "ON documents USING hnsw (embedding vector_cosine_ops);"
-        )
+        if dim > HALFVEC_THRESHOLD:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS documents_embedding_hnsw "
+                f"ON documents USING hnsw ((embedding::halfvec({dim})) halfvec_cosine_ops);"
+            )
+        else:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS documents_embedding_hnsw "
+                "ON documents USING hnsw (embedding vector_cosine_ops);"
+            )
     except psycopg2.Error as e:
         cur.execute("ROLLBACK TO SAVEPOINT hnsw;")
-        print(f"  [경고] HNSW 인덱스를 만들지 못했습니다 (pgvector 버전 확인): {str(e).strip()}")
+        print(f"  [경고] HNSW 인덱스를 만들지 못했습니다 (pgvector 0.7 이상 필요): {str(e).strip()}")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS questions (
