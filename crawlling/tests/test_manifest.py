@@ -70,11 +70,38 @@ def test_save_retries_when_replace_is_locked(tmp_path, monkeypatch):
     assert Manifest.load(str(tmp_path / "manifest.json")).get(make_entry().url) == make_entry()
 
 
-def test_save_gives_up_after_ten_locked_attempts(tmp_path, monkeypatch):
+def test_save_falls_back_to_in_place_write_when_replace_stays_locked(tmp_path, monkeypatch):
     import crawlling.manifest as mod
     monkeypatch.setattr(mod.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(5, "locked")))
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
-    m = Manifest.load(str(tmp_path / "manifest.json"))
+    path = str(tmp_path / "manifest.json")
+    m = Manifest.load(path)
+    m.put(make_entry())
+
+    m.save()  # os.replace 가 영원히 실패해도 예외를 내지 않아야 한다.
+
+    assert Manifest.load(path).get(make_entry().url) == make_entry()
+
+
+def test_save_raises_when_in_place_write_also_fails(tmp_path, monkeypatch):
+    import builtins
+
+    import crawlling.manifest as mod
+
+    path = str(tmp_path / "manifest.json")
+    monkeypatch.setattr(mod.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(5, "locked")))
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    real_open = builtins.open
+
+    def flaky_open(file, mode="r", *args, **kwargs):
+        if str(file) == path and "w" in mode:
+            raise PermissionError(5, "locked (in-place)")
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", flaky_open)
+
+    m = Manifest.load(path)
     m.put(make_entry())
     with pytest.raises(PermissionError):
         m.save()

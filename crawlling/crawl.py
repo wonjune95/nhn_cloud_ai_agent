@@ -229,7 +229,13 @@ def run(args) -> int:
                 print(f"{label} → {result}")
             counts[result] = counts.get(result, 0) + 1
             if result != "skip":
-                manifest.save()
+                try:
+                    manifest.save()
+                except OSError as e:
+                    print(f"  [경고] manifest 저장 실패(다음 페이지에서 다시 시도): {e}")
+        # 위에서 실패를 삼켰더라도(경고만 출력) 마지막에 한 번 더 시도해,
+        # 지속되는 저장 실패는 여기서 그대로 드러나게 한다.
+        manifest.save()
     finally:
         driver.quit()
 
