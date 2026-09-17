@@ -3,6 +3,7 @@ import re
 from db import get_conn, embedding_dim, vector_order_by
 from llm import chat, chat_stream, embed_one
 from rank_bm25 import BM25Okapi
+from tokenize_ko import tokenize
 
 bm25 = None
 bm25_corpus = []
@@ -28,7 +29,7 @@ def build_bm25():
     for content, source, service in rows:
         doc_meta[content] = (source, service)
 
-    tokenized = [doc.split() for doc in bm25_corpus]
+    tokenized = [tokenize(doc) for doc in bm25_corpus]
 
     bm25 = BM25Okapi(tokenized)
 
@@ -76,7 +77,7 @@ def hybrid_search(query, top_k=10):
         doc_meta.setdefault(content, (source, service))
 
     # 🔥 BM25 검색
-    tokenized_query = query.split()
+    tokenized_query = tokenize(query)
     scores = bm25.get_scores(tokenized_query)
 
     bm25_top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
