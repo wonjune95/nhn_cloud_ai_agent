@@ -1,0 +1,15 @@
+# NHN Cloud 디자인 토큰 (www.nhncloud.com 스타일시트에서 추출)
+[theme]
+primaryColor = "#125de6"          # --color-blue-700
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8f9fa"  # --color-gray-100
+textColor = "#222734"             # --color-dark
+font = "sans serif"
+
+[server]
+address = "0.0.0.0"
+port = 8501
+headless = true
+
+[browser]
+gatherUsageStats = false

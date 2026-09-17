@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  db:
+    image: ankane/pgvector
+    container_name: pgvector
+    environment:
+      POSTGRES_DB: ragdb
+      POSTGRES_USER: devops
+      POSTGRES_PASSWORD: devops
+    ports:
+      - "5432:5432"
+
+  app:
+    image: python:3.12
+    container_name: rag-app
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY}
+      NVIDIA_LLM_MODEL: ${NVIDIA_LLM_MODEL:-nvidia/nemotron-3-super-120b-a12b}
+      NVIDIA_EMBEDDING_MODEL: ${NVIDIA_EMBEDDING_MODEL:-nvidia/nemotron-3-embed-1b}
+    volumes:
+      - ./app:/app
+    working_dir: /app
+    command: tail -f /dev/null
+    ports:
+      - "8501:8501"

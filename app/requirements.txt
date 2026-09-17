@@ -1,0 +1,8 @@
+streamlit
+langchain
+langchain-community
+openai
+psycopg2-binary
+beautifulsoup4
+tiktoken
+rank_bm25
