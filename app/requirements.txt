@@ -6,3 +6,4 @@ psycopg2-binary
 beautifulsoup4
 tiktoken
 rank_bm25
+pyyaml

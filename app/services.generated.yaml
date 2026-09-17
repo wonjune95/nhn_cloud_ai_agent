@@ -1,0 +1,96 @@
+Bill/eTax:
+- eTax
+- etax
+Network/Colocation Gateway:
+- Colocation Gateway
+- ColocationGateway
+- colocation gateway
+- colocationgateway
+Network/DNS Plus:
+- DNS Plus
+- DNSPlus
+- dns plus
+- dnsplus
+Network/Direct Connect:
+- Direct Connect
+- DirectConnect
+- direct connect
+- directconnect
+Network/Floating IP:
+- Floating IP
+- FloatingIP
+- floating ip
+- floatingip
+Network/Flow Log:
+- Flow Log
+- FlowLog
+- flow log
+- flowlog
+Network/Internet Gateway:
+- Internet Gateway
+- InternetGateway
+- internet gateway
+- internetgateway
+Network/Load Balancer:
+- Load Balancer
+- LoadBalancer
+- load balancer
+- loadbalancer
+Network/Load Balancer(DSR):
+- Load Balancer(DSR)
+- LoadBalancer(DSR)
+- load balancer(dsr)
+- loadbalancer(dsr)
+Network/NAT Gateway:
+- NAT Gateway
+- NATGateway
+- nat gateway
+- natgateway
+Network/Network ACL:
+- Network ACL
+- NetworkACL
+- network acl
+- networkacl
+Network/Network Interface:
+- Network Interface
+- NetworkInterface
+- network interface
+- networkinterface
+Network/Peering Gateway:
+- Peering Gateway
+- PeeringGateway
+- peering gateway
+- peeringgateway
+Network/Private DNS:
+- Private DNS
+- PrivateDNS
+- private dns
+- privatedns
+Network/Security Groups:
+- Security Groups
+- SecurityGroups
+- security groups
+- securitygroups
+Network/Service Gateway:
+- Service Gateway
+- ServiceGateway
+- service gateway
+- servicegateway
+Network/Traffic Mirroring:
+- Traffic Mirroring
+- TrafficMirroring
+- traffic mirroring
+- trafficmirroring
+Network/Transit Hub:
+- Transit Hub
+- TransitHub
+- transit hub
+- transithub
+Network/VPC:
+- VPC
+- vpc
+Network/VPN Gateway(Site-to-Site VPN):
+- VPN Gateway(Site-to-Site VPN)
+- VPNGateway(Site-to-SiteVPN)
+- vpn gateway(site-to-site vpn)
+- vpngateway(site-to-sitevpn)

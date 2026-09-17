@@ -19,7 +19,7 @@ def build_bm25():
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("SELECT content, source, service FROM documents")
+    cur.execute("SELECT content, source_path, service FROM documents")
     rows = cur.fetchall()
 
     bm25_corpus = [r[0] for r in rows]
@@ -62,9 +62,9 @@ def hybrid_search(query, top_k=10):
     q_vec = to_pgvector(q_emb)
 
     cur.execute("""
-    SELECT content, source, service
+    SELECT content, source_path, service
       FROM documents
-     ORDER BY embedding <-> %s::vector
+     ORDER BY embedding <=> %s::vector
      LIMIT %s;
     """, (q_vec, top_k))
 

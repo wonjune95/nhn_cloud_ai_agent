@@ -1,227 +1,182 @@
+"""nhn_cloud_docs/ 의 HTML 을 섹션 청크로 나눠 pgvector 에 적재한다.
+
+    python ingest.py                 # 바뀐 문서만 (source_path + content_hash 비교)
+    python ingest.py --rebuild       # 테이블을 지우고 전부 다시
+    python ingest.py --limit 20      # 앞 20개 문서만 (시범)
+
+문서 경로 규칙 '카테고리/서비스/문서명.html' 에서 category/service/doc_title 을,
+문서명에서 doc_type 을 정한다. 이미지는 DB 에 넣지 않고 경로만 청크 메타에 둔다.
+"""
+
+import argparse
+import hashlib
+import json
 import os
-from bs4 import BeautifulSoup
-from db import get_conn
-from llm import EMBEDDING_MODEL_NAME, embed, embed_one
+import sys
+from typing import Iterator
 
-DATA_DIR = "./data"
+from psycopg2.extras import Json
 
-MAX_CHARS = 800
-# NIM 임베딩은 배열 입력을 받는다. 청크를 묶어 보내 호출 횟수를 줄인다.
+DOCS_DIR = os.getenv(
+    "DOCS_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nhn_cloud_docs"),
+)
+NO_SERVICE = "_"
 BATCH_SIZE = 32
 
-# 본문을 이루는 블록 요소. 표(table)와 코드(pre)는 전용 직렬화를 거친다.
-BLOCK_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "pre", "table", "blockquote"]
+
+def doc_type_of(doc_title: str) -> str:
+    upper = doc_title.upper()
+    if "콘솔" in doc_title:
+        return "console"
+    if "API" in upper:
+        return "api"
+    if "개요" in doc_title:
+        return "overview"
+    return "other"
 
 
-def table_to_text(table):
-    """표를 행 단위 텍스트로 편다.
-
-    NHN Cloud API 가이드는 파라미터·응답 필드가 대부분 표에 들어 있다.
-    셀을 그냥 이어 붙이면 800자 청킹에서 잘렸을 때 어느 열의 값인지 알 수 없으므로,
-    헤더가 있으면 "헤더: 값" 쌍으로 만들어 행 하나가 스스로를 설명하게 한다.
-    """
-    lines = []
-
-    caption = table.find("caption")
-    if caption:
-        lines.append(f"[표] {caption.get_text(' ', strip=True)}")
-
-    headers = []
-
-    for tr in table.find_all("tr"):
-        cells = tr.find_all(["th", "td"])
-        if not cells:
-            continue
-
-        values = [c.get_text(" ", strip=True) for c in cells]
-        if not any(values):
-            continue
-
-        # 첫 머리글 행은 헤더로 기억해 둔다.
-        if not headers and all(c.name == "th" for c in cells):
-            headers = values
-            lines.append(" | ".join(values))
-            continue
-
-        if headers and len(headers) == len(values):
-            lines.append(" | ".join(f"{h}: {v}" for h, v in zip(headers, values) if v))
-        else:
-            lines.append(" | ".join(values))
-
-    return "\n".join(lines)
+def split_source_path(rel_path: str) -> tuple[str, str, str]:
+    """'카테고리/서비스/문서명.html' -> (category, service, doc_title)."""
+    parts = rel_path.replace("\\", "/").strip("/").split("/")
+    doc_title = os.path.splitext(parts[-1])[0]
+    category = parts[0]
+    service = parts[1] if len(parts) >= 3 else NO_SERVICE
+    return category, service, doc_title
 
 
-def extract_text(html_path):
-    with open(html_path, "r", encoding="utf-8") as f:
-        soup = BeautifulSoup(f, "html.parser")
-
-    texts = []
-    consumed = set()
-
-    # find_all 은 문서 순서대로 반환하므로 상위 블록이 항상 먼저 나온다.
-    # 상위 블록이 이미 처리한 내용을 하위에서 다시 담지 않도록 조상을 확인한다.
-    for el in soup.find_all(BLOCK_TAGS):
-        if any(id(p) in consumed for p in el.parents):
-            continue
-
-        if el.name == "table":
-            text = table_to_text(el)
-        elif el.name == "pre":
-            # 코드 예제는 들여쓰기가 의미를 가지므로 원문을 그대로 둔다.
-            text = "[코드]\n" + el.get_text().strip()
-        elif el.name in ("h1", "h2", "h3", "h4", "h5", "h6"):
-            text = "#" * int(el.name[1]) + " " + el.get_text(" ", strip=True)
-        else:
-            text = el.get_text(" ", strip=True)
-
-        consumed.add(id(el))
-
-        if text.strip():
-            texts.append(text)
-
-    # 🔥 이미지 설명 포함
-    for img in soup.find_all("img"):
-        alt = img.get("alt") or ""
-        src = img.get("src") or ""
-        texts.append(f"[이미지] {alt} {src}")
-
-    return "\n".join(texts)
-
-def split_text(text, chunk_size=800, overlap=150):
-    chunks = []
-    start = 0
-
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        chunks.append(chunk)
-
-        start += (chunk_size - overlap)
-
-    return chunks
+def iter_documents(docs_dir: str) -> Iterator[str]:
+    for root, dirs, files in os.walk(docs_dir):
+        dirs.sort()
+        for name in sorted(files):
+            if name.endswith(".html"):
+                rel = os.path.relpath(os.path.join(root, name), docs_dir)
+                yield rel.replace("\\", "/")
 
 
-def embed_text(text):
-    return embed_one(text, input_type="passage")
-
-def embed_texts(texts):
-    return embed(texts, input_type="passage")
-
-def split_text_with_overlap(text, chunk_size=800, overlap=150):
-    chunks = []
-    start = 0
-
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        chunks.append(chunk)
-
-        start += (chunk_size - overlap)
-
-    return chunks
-
-def extract_with_images(html_path):
-    from bs4 import BeautifulSoup
-
-    with open(html_path, "r", encoding="utf-8") as f:
-        soup = BeautifulSoup(f, "html.parser")
-
-    texts = []
-
-    for tag in soup.find_all(["p", "h1", "h2", "h3", "li"]):
-        texts.append(tag.get_text(strip=True))
-
-    # 🔥 이미지 설명 추가
-    for img in soup.find_all("img"):
-        alt = img.get("alt") or ""
-        src = img.get("src") or ""
-
-        if alt or src:
-            texts.append(f"[이미지 설명] {alt} {src}")
-
-    return "\n".join(texts)
-
-def extract_service(path):
-    parts = path.replace("\\", "/").split("/")
-    return parts[2] if len(parts) > 2 else "unknown"
-
-def init_db(cur):
-    cur.execute("DROP TABLE IF EXISTS documents;")
-    cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-
-    # dimension 자동 추출 = nvidia/nemotron-3-embed-1b 기준 2048
-    dim = len(embed_text("test"))
-    print(f"임베딩 모델: {EMBEDDING_MODEL_NAME} (dim={dim})")
-
-    cur.execute(f"""
-    CREATE TABLE documents (
-        id SERIAL PRIMARY KEY,
-        content TEXT,
-        embedding VECTOR({dim}),
-        source TEXT,
-        service TEXT
-    );
-    """)
+def load_manifest_urls(docs_dir: str) -> dict[str, str]:
+    path = os.path.join(docs_dir, "manifest.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return {e["path"]: e["url"] for e in json.load(f).values() if e.get("path")}
 
 
-def ingest():
+def file_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def existing_hash(cur, source_path: str) -> str | None:
+    cur.execute("SELECT content_hash FROM documents WHERE source_path = %s LIMIT 1", (source_path,))
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None) -> int:
+    from chunker import chunk_html
+    from llm import embed
+
+    with open(os.path.join(docs_dir, rel_path), encoding="utf-8") as f:
+        html = f.read()
+
+    category, service, doc_title = split_source_path(rel_path)
+    doc_rel_dir = os.path.dirname(rel_path)
+    chunks = chunk_html(html, doc_title, doc_rel_dir)
+    digest = file_hash(html)
+
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM documents WHERE source_path = %s", (rel_path,))
+
+        for start in range(0, len(chunks), BATCH_SIZE):
+            batch = chunks[start:start + BATCH_SIZE]
+            vectors = embed([c.content for c in batch], input_type="passage")
+            for chunk, vector in zip(batch, vectors):
+                cur.execute(
+                    """INSERT INTO documents
+                       (content, embedding, category, service, doc_type, doc_title,
+                        section_path, source_path, source_url, content_hash, images)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (chunk.content, vector, category, service, doc_type_of(doc_title), doc_title,
+                     chunk.section_path, rel_path, url, digest,
+                     Json([{"path": i.path, "caption": i.caption, "alt": i.alt} for i in chunk.images])),
+                )
+
+        conn.commit()   # 문서 단위 커밋: 중간에 끊겨도 앞 문서는 남는다
+    finally:
+        cur.close()
+    return len(chunks)
+
+
+def run(argv=None) -> int:
+    args = parse_args(argv)
+    docs_dir = os.path.abspath(args.docs_dir)
+    if not os.path.isdir(docs_dir):
+        print(f"문서 폴더가 없습니다: {docs_dir}")
+        return 1
+
+    if not args.allow_no_manifest and not os.path.exists(os.path.join(docs_dir, "manifest.json")):
+        print(
+            f"{docs_dir} 에 manifest.json 이 없습니다. 새 크롤러(crawlling/crawl.py)로 수집한 폴더인지 "
+            "확인하세요. 그래도 적재하려면 --allow-no-manifest 를 붙이세요."
+        )
+        return 1
+
+    from db import get_conn, init_schema
+    from llm import EMBEDDING_MODEL_NAME, embed_one
+
+    urls = load_manifest_urls(docs_dir)
     conn = get_conn()
+
+    dim = len(embed_one("test"))
+    print(f"임베딩 모델: {EMBEDDING_MODEL_NAME} (dim={dim}) / 문서 폴더: {docs_dir}")
+    init_schema(conn, dim, rebuild=args.rebuild)
+
+    done = skipped = 0
+    total_chunks = 0
+    failed: list[tuple[str, str]] = []
     cur = conn.cursor()
 
-    init_db(cur)
+    for n, rel in enumerate(iter_documents(docs_dir), 1):
+        if args.limit and n > args.limit:
+            break
 
-    total = 0
-    skipped = 0
+        with open(os.path.join(docs_dir, rel), encoding="utf-8") as f:
+            digest = file_hash(f.read())
+        if not args.rebuild and existing_hash(cur, rel) == digest:
+            skipped += 1
+            continue
 
-    # API 가이드는 엔드포인트마다 같은 공통 응답 표를 반복한다. 완전히 같은 청크를
-    # 여러 벌 넣으면 검색 상위 K개를 동일 내용이 차지해버리므로 한 벌만 남긴다.
-    seen = set()
+        try:
+            count = ingest_document(conn, docs_dir, rel, urls.get(rel))
+        except Exception as e:
+            conn.rollback()
+            failed.append((rel, f"{type(e).__name__}: {e}"))
+            print(f"  실패: {rel} — {e}")
+            continue
 
-    for root, _, files in os.walk(DATA_DIR):
-        for file in files:
-            if not file.endswith(".html"):
-                continue
-
-            path = os.path.join(root, file)
-
-            text = extract_text(path)
-
-            chunks = []
-            for c in split_text(text):
-                key = c.strip()
-                if not key or key in seen:
-                    skipped += 1
-                    continue
-                seen.add(key)
-                chunks.append(c)
-
-            if not chunks:
-                continue
-
-            print(f"{file} → {len(chunks)} chunks")
-
-            service = extract_service(path)
-
-            for i in range(0, len(chunks), BATCH_SIZE):
-                batch = chunks[i:i + BATCH_SIZE]
-                embeddings = embed_texts(batch)
-
-                for chunk, emb in zip(batch, embeddings):
-                    cur.execute(
-                        "INSERT INTO documents (content, embedding, source, service) VALUES (%s, %s, %s, %s)",
-                        (chunk, emb, path, service)
-                    )
-
-            total += len(chunks)
-            # 파일 단위로 커밋해 중간에 끊겨도 앞부분이 남도록 한다.
-            conn.commit()
-
-    conn.commit()
-    print(f"완료: 총 {total} chunks 적재 (중복 제거 {skipped}개)")
+        done += 1
+        total_chunks += count
+        print(f"[{n}] {rel} → {count} chunks")
 
     cur.close()
     conn.close()
 
+    print(f"완료: 문서 {done}개 적재, {skipped}개 건너뜀, {len(failed)}개 실패 (청크 {total_chunks}개)")
+    for rel, err in failed:
+        print(f"  - {rel}: {err}")
+    return 1 if failed else 0
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--docs-dir", default=DOCS_DIR)
+    p.add_argument("--rebuild", action="store_true", help="documents 테이블을 지우고 전부 다시 적재")
+    p.add_argument("--limit", type=int, default=0, help="앞 N개 문서만 (시범용)")
+    p.add_argument("--allow-no-manifest", action="store_true",
+                    help="manifest.json 이 없는 폴더도 적재 (옛 형식 폴더 주의)")
+    return p.parse_args(argv)
+
 
 if __name__ == "__main__":
-    ingest()
+    sys.exit(run())
