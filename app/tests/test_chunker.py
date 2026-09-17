@@ -166,7 +166,7 @@ def test_long_table_is_split_by_rows_with_header_repeated():
     assert len(result) >= 3
     for c in result:
         assert c.content.startswith("t > 표\n이름 | 설명\n")
-        assert len(c.content) <= 800 + len("t > 표\n이름 | 설명\n")
+        assert len(c.content) <= 800
     assert sum(c.content.count("이름: 키") for c in result) == 30
 
 
@@ -192,3 +192,25 @@ def test_has_breadcrumb_true_drops_first_h2_even_without_gt():
     html = '<section><h2>브레드크럼 없음</h2><h3>A</h3><p>본문</p></section>'
     result = chunk_html(html, "t", "C/S", has_breadcrumb=True)
     assert [c.section_path for c in result] == ["A"]
+
+
+def test_split_table_pieces_respect_cap_including_header():
+    rows = "".join(f"<tr><td>키{i}</td><td>{'값' * 60}</td></tr>" for i in range(30))
+    html = f'<section><h3>표</h3><table><tr><th>이름</th><th>설명</th></tr>{rows}</table></section>'
+    for c in chunk_html(html, "아주 긴 문서 제목입니다", "C/S", max_chars=800):
+        assert len(c.content) <= 800, len(c.content)
+
+
+def test_images_follow_their_table_rows_across_splits():
+    rows = "".join(
+        f"<tr><td>키{i}</td><td>{'값' * 60}{' <img src=\"./images/r%d.png\"/>' % i if i in (5, 25) else ''}</td></tr>"
+        for i in range(30)
+    )
+    html = f'<section><h3>표</h3><table><tr><th>이름</th><th>설명</th></tr>{rows}</table></section>'
+    result = chunk_html(html, "t", "C/S", max_chars=800)
+    assert sum(len(c.images) for c in result) == 2
+    for c in result:
+        for im in c.images:
+            row = im.path.rsplit("r", 1)[1].split(".")[0]          # "5" 또는 "25"
+            assert f"이름: 키{row} |" in c.content, (im.path, c.section_path)
+            assert f"[스크린샷 1: " in c.content
