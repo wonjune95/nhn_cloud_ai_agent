@@ -7,6 +7,7 @@
 import hashlib
 import json
 import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
@@ -56,7 +57,18 @@ class Manifest:
                 {url: asdict(e) for url, e in self.entries.items()},
                 f, ensure_ascii=False, indent=1,
             )
-        os.replace(tmp, self.path)
+        # Windows(특히 OneDrive 동기화 폴더)에서는 다른 프로세스가 잠깐
+        # manifest.json 을 열어두면 os.replace 가 PermissionError 를 낸다.
+        # 몇 번 재시도하면 대개 풀린다.
+        attempts = 10
+        for attempt in range(1, attempts + 1):
+            try:
+                os.replace(tmp, self.path)
+                return
+            except PermissionError:
+                if attempt == attempts:
+                    raise
+                time.sleep(0.2)
 
     def get(self, url: str) -> Entry | None:
         return self.entries.get(url)

@@ -1,3 +1,5 @@
+import pytest
+
 from crawlling.manifest import Entry, Manifest, content_hash, now_iso
 
 
@@ -46,6 +48,36 @@ def test_save_leaves_no_temp_file(tmp_path):
     m.save()
     assert path.exists()
     assert not (tmp_path / "manifest.json.tmp").exists()
+
+
+def test_save_retries_when_replace_is_locked(tmp_path, monkeypatch):
+    import crawlling.manifest as mod
+    calls = {"n": 0}
+    real_replace = mod.os.replace
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError(5, "locked")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(mod.os, "replace", flaky_replace)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    m = Manifest.load(str(tmp_path / "manifest.json"))
+    m.put(make_entry())
+    m.save()
+    assert calls["n"] == 3
+    assert Manifest.load(str(tmp_path / "manifest.json")).get(make_entry().url) == make_entry()
+
+
+def test_save_gives_up_after_ten_locked_attempts(tmp_path, monkeypatch):
+    import crawlling.manifest as mod
+    monkeypatch.setattr(mod.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(5, "locked")))
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    m = Manifest.load(str(tmp_path / "manifest.json"))
+    m.put(make_entry())
+    with pytest.raises(PermissionError):
+        m.save()
 
 
 def test_content_hash_is_deterministic_and_distinct():

@@ -217,7 +217,8 @@ def run(args) -> int:
             else:
                 print(f"{label} → {result}")
             counts[result] = counts.get(result, 0) + 1
-            manifest.save()
+            if result != "skip":
+                manifest.save()
     finally:
         driver.quit()
 
