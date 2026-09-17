@@ -214,3 +214,19 @@ def test_images_follow_their_table_rows_across_splits():
             row = im.path.rsplit("r", 1)[1].split(".")[0]          # "5" 또는 "25"
             assert f"이름: 키{row} |" in c.content, (im.path, c.section_path)
             assert f"[스크린샷 1: " in c.content
+
+
+def test_image_only_table_row_is_not_dropped():
+    html = ('<section><h3>A</h3><table><tr><th>이름</th><th>값</th></tr>'
+            '<tr><td></td><td><img src="./images/a.png"/></td></tr>'
+            '<tr><td>b</td><td>2</td></tr></table></section>')
+    c = chunk_html(html, "t", "C/S")[0]
+    assert [im.path for im in c.images] == ["C/S/images/a.png"]
+    assert "이름 | 값\n이름: b | 값: 2" in c.content      # table_to_text 출력은 그대로
+
+
+def test_table_with_only_image_rows_keeps_images():
+    html = '<section><h3>A</h3><p>설명</p><table><tr><td><img src="./images/x.png"/></td></tr></table></section>'
+    c = chunk_html(html, "t", "C/S")[0]
+    assert [im.path for im in c.images] == ["C/S/images/x.png"]
+    assert c.images[0].caption == "설명"

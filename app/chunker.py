@@ -47,6 +47,10 @@ def _table_lines(table) -> list[tuple[str, list]]:
         lines.append((f"[표] {caption.get_text(' ', strip=True)}", []))
 
     headers: list[str] = []
+    # 텍스트 없이 이미지만 든 행은 줄을 만들지 않지만(표 직렬화는 그대로), 그 이미지를
+    # 잃어버리면 안 되므로 다음에 실제로 줄이 생길 때(또는 끝까지 줄이 안 생기면 마지막에)
+    # 함께 붙인다.
+    pending: list = []
     for tr in table.find_all("tr"):
         cells = tr.find_all(["th", "td"])
         if not cells:
@@ -54,9 +58,13 @@ def _table_lines(table) -> list[tuple[str, list]]:
 
         values = [c.get_text(" ", strip=True) for c in cells]
         if not any(values):
+            imgs_in_row = tr.find_all("img")
+            if imgs_in_row:
+                pending.extend(imgs_in_row)
             continue
 
-        imgs_in_row = tr.find_all("img")
+        imgs_in_row = pending + tr.find_all("img")
+        pending = []
 
         if not headers and all(c.name == "th" for c in cells):
             headers = values
@@ -67,6 +75,13 @@ def _table_lines(table) -> list[tuple[str, list]]:
             lines.append((" | ".join(f"{h}: {v}" for h, v in zip(headers, values) if v), imgs_in_row))
         else:
             lines.append((" | ".join(values), imgs_in_row))
+
+    if pending:
+        if lines:
+            last_text, last_imgs = lines[-1]
+            lines[-1] = (last_text, last_imgs + pending)
+        else:
+            lines.append(("", pending))
 
     return lines
 
