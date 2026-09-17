@@ -12,6 +12,8 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      # Service 'db' 때문에 DB_PORT=tcp://… 가 자동 주입되어 앱의 DB_PORT 와 충돌한다.
+      enableServiceLinks: false
       imagePullSecrets:
         - name: regcred
       containers:
@@ -21,6 +23,7 @@ spec:
           args: ["--docs-dir", "/docs"]
           env:
             - { name: DB_HOST, value: db }
+            - { name: DB_PORT, value: "5432" }
             - name: NVIDIA_API_KEY
               valueFrom:
                 secretKeyRef: { name: llm, key: NVIDIA_API_KEY }

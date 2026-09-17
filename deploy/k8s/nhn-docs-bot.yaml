@@ -115,6 +115,8 @@ spec:
       labels:
         app: ui
     spec:
+      # Service 'db' 때문에 DB_PORT=tcp://… 가 자동 주입되어 앱의 DB_PORT 와 충돌한다.
+      enableServiceLinks: false
       imagePullSecrets:
         - name: regcred
       containers:
@@ -122,6 +124,7 @@ spec:
           image: harbor.114-110-181-178.nip.io/nnd/nhn-docs-bot:latest
           env:
             - { name: DB_HOST, value: db }
+            - { name: DB_PORT, value: "5432" }
             - { name: DOCS_DIR, value: /docs }
             - name: NVIDIA_API_KEY
               valueFrom:
