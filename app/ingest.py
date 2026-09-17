@@ -46,7 +46,8 @@ def split_source_path(rel_path: str) -> tuple[str, str, str]:
 
 
 def iter_documents(docs_dir: str) -> Iterator[str]:
-    for root, _, files in os.walk(docs_dir):
+    for root, dirs, files in os.walk(docs_dir):
+        dirs.sort()
         for name in sorted(files):
             if name.endswith(".html"):
                 rel = os.path.relpath(os.path.join(root, name), docs_dir)
@@ -84,36 +85,45 @@ def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None) -> int:
     digest = file_hash(html)
 
     cur = conn.cursor()
-    cur.execute("DELETE FROM documents WHERE source_path = %s", (rel_path,))
+    try:
+        cur.execute("DELETE FROM documents WHERE source_path = %s", (rel_path,))
 
-    for start in range(0, len(chunks), BATCH_SIZE):
-        batch = chunks[start:start + BATCH_SIZE]
-        vectors = embed([c.content for c in batch], input_type="passage")
-        for chunk, vector in zip(batch, vectors):
-            cur.execute(
-                """INSERT INTO documents
-                   (content, embedding, category, service, doc_type, doc_title,
-                    section_path, source_path, source_url, content_hash, images)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (chunk.content, vector, category, service, doc_type_of(doc_title), doc_title,
-                 chunk.section_path, rel_path, url, digest,
-                 Json([{"path": i.path, "caption": i.caption, "alt": i.alt} for i in chunk.images])),
-            )
+        for start in range(0, len(chunks), BATCH_SIZE):
+            batch = chunks[start:start + BATCH_SIZE]
+            vectors = embed([c.content for c in batch], input_type="passage")
+            for chunk, vector in zip(batch, vectors):
+                cur.execute(
+                    """INSERT INTO documents
+                       (content, embedding, category, service, doc_type, doc_title,
+                        section_path, source_path, source_url, content_hash, images)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (chunk.content, vector, category, service, doc_type_of(doc_title), doc_title,
+                     chunk.section_path, rel_path, url, digest,
+                     Json([{"path": i.path, "caption": i.caption, "alt": i.alt} for i in chunk.images])),
+                )
 
-    conn.commit()   # 문서 단위 커밋: 중간에 끊겨도 앞 문서는 남는다
-    cur.close()
+        conn.commit()   # 문서 단위 커밋: 중간에 끊겨도 앞 문서는 남는다
+    finally:
+        cur.close()
     return len(chunks)
 
 
 def run(argv=None) -> int:
-    from db import get_conn, init_schema
-    from llm import EMBEDDING_MODEL_NAME, embed_one
-
     args = parse_args(argv)
     docs_dir = os.path.abspath(args.docs_dir)
     if not os.path.isdir(docs_dir):
         print(f"문서 폴더가 없습니다: {docs_dir}")
         return 1
+
+    if not args.allow_no_manifest and not os.path.exists(os.path.join(docs_dir, "manifest.json")):
+        print(
+            f"{docs_dir} 에 manifest.json 이 없습니다. 새 크롤러(crawlling/crawl.py)로 수집한 폴더인지 "
+            "확인하세요. 그래도 적재하려면 --allow-no-manifest 를 붙이세요."
+        )
+        return 1
+
+    from db import get_conn, init_schema
+    from llm import EMBEDDING_MODEL_NAME, embed_one
 
     urls = load_manifest_urls(docs_dir)
     conn = get_conn()
@@ -163,6 +173,8 @@ def parse_args(argv=None):
     p.add_argument("--docs-dir", default=DOCS_DIR)
     p.add_argument("--rebuild", action="store_true", help="documents 테이블을 지우고 전부 다시 적재")
     p.add_argument("--limit", type=int, default=0, help="앞 N개 문서만 (시범용)")
+    p.add_argument("--allow-no-manifest", action="store_true",
+                    help="manifest.json 이 없는 폴더도 적재 (옛 형식 폴더 주의)")
     return p.parse_args(argv)
 
 

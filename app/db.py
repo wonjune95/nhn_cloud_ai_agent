@@ -34,6 +34,18 @@ def _table_exists(cur, table: str) -> bool:
     return cur.fetchone() is not None
 
 
+def _embedding_dim(cur) -> int | None:
+    """documents.embedding 에 선언된 vector 차원. 알 수 없으면(컬럼 없음, -1/NULL) None."""
+    cur.execute(
+        "SELECT atttypmod FROM pg_attribute "
+        "WHERE attrelid = 'documents'::regclass AND attname = 'embedding'"
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None or row[0] < 0:
+        return None
+    return row[0]
+
+
 def init_schema(conn, dim: int, rebuild: bool = False) -> None:
     """documents / questions 테이블과 인덱스를 만든다.
 
@@ -45,8 +57,15 @@ def init_schema(conn, dim: int, rebuild: bool = False) -> None:
 
     if rebuild:
         cur.execute("DROP TABLE IF EXISTS documents;")
-    elif _table_exists(cur, "documents") and not _has_column(cur, "documents", "content_hash"):
-        raise RuntimeError("documents 테이블이 구 스키마입니다. python ingest.py --rebuild 로 실행하세요.")
+    elif _table_exists(cur, "documents"):
+        if not _has_column(cur, "documents", "content_hash"):
+            raise RuntimeError("documents 테이블이 구 스키마입니다. python ingest.py --rebuild 로 실행하세요.")
+        existing = _embedding_dim(cur)
+        if existing is not None and existing != dim:
+            raise RuntimeError(
+                f"documents.embedding 차원이 {existing} 인데 현재 임베딩은 {dim} 입니다. "
+                "python ingest.py --rebuild 로 실행하세요."
+            )
 
     cur.execute(f"""
     CREATE TABLE IF NOT EXISTS documents (

@@ -1,3 +1,4 @@
+import ingest
 from ingest import doc_type_of, split_source_path
 
 
@@ -34,3 +35,13 @@ def test_split_source_path_two_levels_becomes_placeholder():
 
 def test_split_source_path_accepts_backslashes():
     assert split_source_path("Network\\VPC\\API 가이드.html") == ("Network", "VPC", "API 가이드")
+
+
+def test_run_refuses_docs_dir_without_manifest(tmp_path, capsys):
+    (tmp_path / "문서.html").write_text("<section><h3>A</h3><p>본문</p></section>", encoding="utf-8")
+
+    # manifest.json 이 없으므로 DB/임베딩 API 에 닿기 전에 거절해야 한다.
+    assert ingest.run(["--docs-dir", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert "manifest.json" in out
+    assert "--allow-no-manifest" in out
