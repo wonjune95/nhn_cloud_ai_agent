@@ -18,5 +18,7 @@ def tokenize(text: str) -> list[str]:
             else:
                 tokens.extend(tok[i:i + 2] for i in range(len(tok) - 1))
         else:
-            tokens.append(tok.lower())
+            tok = tok.rstrip("._-").lower()
+            if tok:
+                tokens.append(tok)
     return tokens

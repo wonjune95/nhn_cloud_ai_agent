@@ -32,3 +32,9 @@ def test_bm25_with_bigrams_matches_inflected_query():
     scores = bm25.get_scores(tokenize("인스턴스를 생성하려면"))
     assert scores[0] > 0
     assert all(scores[0] > s for s in scores[1:])
+
+
+def test_trailing_punctuation_is_stripped_from_ascii_tokens():
+    assert tokenize("버전은 v2.0. 입니다") == ["버전", "전은", "v2.0", "입니", "니다"]
+    assert tokenize("api-준비") == ["api", "준비"]
+    assert tokenize("---") == []
