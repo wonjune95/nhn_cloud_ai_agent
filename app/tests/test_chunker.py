@@ -135,3 +135,60 @@ def test_first_image_of_new_section_is_captioned_by_its_heading():
     cs = chunk_html(html, "t", "C/S")
     assert cs[1].section_path == "새 절"
     assert cs[1].images[0].caption == "새 절"
+
+
+def test_nested_table_in_list_item_is_serialized_separately():
+    html = ('<section><h3>A</h3><ul><li>항목 설명'
+            '<table><tr><th>이름</th><th>값</th></tr><tr><td>a</td><td>1</td></tr></table>'
+            '</li></ul></section>')
+    c = chunk_html(html, "t", "C/S")[0]
+    assert "항목 설명\n이름 | 값\n이름: a | 값: 1" in c.content
+    assert c.content.count("이름: a") == 1
+
+
+def test_nested_pre_in_blockquote_keeps_code_marker():
+    html = '<section><h3>A</h3><blockquote>참고 <pre>curl -X GET /x</pre></blockquote></section>'
+    c = chunk_html(html, "t", "C/S")[0]
+    assert "참고\n[코드]\ncurl -X GET /x" in c.content
+
+
+def test_image_inside_nested_table_uses_cell_caption_and_list_text_is_not_duplicated():
+    html = ('<section><h3>A</h3><li>설명<table><tr><td>로그인 화면 <img src="./images/l.png"/></td></tr></table></li></section>')
+    c = chunk_html(html, "t", "C/S")[0]
+    assert c.images[0].caption == "로그인 화면"
+    assert c.content.count("로그인 화면") == 2      # 셀 텍스트 1회 + 마커 1회
+
+
+def test_long_table_is_split_by_rows_with_header_repeated():
+    rows = "".join(f"<tr><td>키{i}</td><td>{'값' * 60}</td></tr>" for i in range(30))
+    html = f'<section><h3>표</h3><table><tr><th>이름</th><th>설명</th></tr>{rows}</table></section>'
+    result = chunk_html(html, "t", "C/S", max_chars=800)
+    assert len(result) >= 3
+    for c in result:
+        assert c.content.startswith("t > 표\n이름 | 설명\n")
+        assert len(c.content) <= 800 + len("t > 표\n이름 | 설명\n")
+    assert sum(c.content.count("이름: 키") for c in result) == 30
+
+
+def test_header_and_marker_lines_count_toward_limit():
+    body = "가" * 700
+    html = f'<section><h3>절</h3><p>{body}</p><p>{body} <img src="./images/a.png"></p></section>'
+    result = chunk_html(html, "t", "C/S", max_chars=1450)
+    assert len(result) == 2          # 700+700 자체는 1,400 이지만 헤더·마커 줄을 더하면 넘는다
+
+
+def test_missing_flag_from_crawler_attribute():
+    html = '<section><h3>A</h3><p>본문 <img src="https://x/y.png" data-missing="true"></p></section>'
+    img = chunk_html(html, "t", "C/S")[0].images[0]
+    assert img.missing is True and img.path == "https://x/y.png"
+
+
+def test_has_breadcrumb_false_keeps_heading_with_gt():
+    html = '<section><h2>Network &gt; Subnet 메뉴 안내</h2><p>본문</p></section>'
+    assert chunk_html(html, "t", "C/S", has_breadcrumb=False)[0].section_path == "Network > Subnet 메뉴 안내"
+
+
+def test_has_breadcrumb_true_drops_first_h2_even_without_gt():
+    html = '<section><h2>브레드크럼 없음</h2><h3>A</h3><p>본문</p></section>'
+    result = chunk_html(html, "t", "C/S", has_breadcrumb=True)
+    assert [c.section_path for c in result] == ["A"]
