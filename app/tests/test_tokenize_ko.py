@@ -21,7 +21,14 @@ def test_punctuation_dropped():
 
 
 def test_bm25_with_bigrams_matches_inflected_query():
-    docs = ["인스턴스 생성 버튼을 클릭합니다", "오브젝트 스토리지 컨테이너를 만듭니다"]
+    # 문서가 2개뿐이면 IDF 가 log(1)=0 이라 점수가 안 나온다. 무관 문서를 셋 둔다.
+    docs = [
+        "인스턴스 생성 버튼을 클릭합니다",
+        "오브젝트 스토리지 컨테이너를 만듭니다",
+        "로드 밸런서 리스너를 추가합니다",
+        "요금은 시간 단위로 청구됩니다",
+    ]
     bm25 = BM25Okapi([tokenize(d) for d in docs])
     scores = bm25.get_scores(tokenize("인스턴스를 생성하려면"))
-    assert scores[0] > scores[1] > 0 or (scores[0] > 0 and scores[1] == 0)
+    assert scores[0] > 0
+    assert all(scores[0] > s for s in scores[1:])
