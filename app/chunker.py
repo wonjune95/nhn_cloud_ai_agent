@@ -1,8 +1,9 @@
 """HTML 문서를 섹션 단위 청크로 바꾼다.
 
-NHN Cloud 콘솔 가이드는 h3/h4 하나가 작업 단계 묶음이고, 스크린샷은 대부분(92%)
-설명 문단 바로 뒤에 온다. 그래서 섹션을 청크 단위로 삼고, 이미지는 자기가 속한
-블록(문단·목록 항목·표 칸)에 묶어 캡션을 그 블록 텍스트로 잡는다.
+NHN Cloud 콘솔 가이드는 h3/h4 하나가 작업 단계 묶음이고, 스크린샷은 대부분 설명 문단
+바로 뒤에 오는 텍스트 없는 빈 문단(`<p><img></p>`)에 단독으로 들어 있다. 그래서 섹션을
+청크 단위로 삼고, 이미지는 자기가 속한 블록(문단·목록 항목·표 칸)의 텍스트를 캡션으로
+쓰되, 그 블록이 비어 있으면 바로 앞 텍스트 블록의 텍스트를 캡션으로 가져온다.
 """
 
 from dataclasses import dataclass, field
@@ -67,6 +68,17 @@ def _block_text(el) -> str:
     if el.name == "pre":
         return "[코드]\n" + el.get_text().strip()
     return el.get_text(" ", strip=True)
+
+
+def _caption_for(img, el, text: str, last_text: str) -> str:
+    """이미지가 속한 블록의 텍스트를 캡션으로 쓴다. 표 안에서는 이미지가 든 칸(td/th)의
+    텍스트를 우선한다. 블록(또는 칸) 텍스트가 비어 있으면 바로 앞 텍스트 블록을 쓴다."""
+    if el.name == "table":
+        cell = img.find_parent(["td", "th"])
+        cell_text = cell.get_text(" ", strip=True) if cell else ""
+        if cell_text:
+            return cell_text
+    return text if text else last_text
 
 
 def _image(img, caption: str, doc_rel_dir: str) -> Image:
@@ -142,16 +154,19 @@ def chunk_html(html: str, doc_title: str, doc_rel_dir: str, max_chars: int = MAX
         level = HEADING_LEVELS.get(el.name)
         if level:
             flush()
-            stack[level] = el.get_text(" ", strip=True)
+            heading_text = el.get_text(" ", strip=True)
+            stack[level] = heading_text
             for deeper in range(level + 1, 5):
                 stack[deeper] = ""
+            # 새 섹션의 첫 이미지는(직전 섹션의 마지막 문장이 아니라) 이 제목으로 캡션한다.
+            last_text = heading_text
             continue
 
         if el.name == "img":
             text, images = "", [_image(el, last_text, doc_rel_dir)]
         else:
             text = _block_text(el)
-            images = [_image(img, text, doc_rel_dir) for img in el.find_all("img")]
+            images = [_image(img, _caption_for(img, el, text, last_text), doc_rel_dir) for img in el.find_all("img")]
 
         if not text and not images:
             continue

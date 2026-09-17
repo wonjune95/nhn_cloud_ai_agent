@@ -104,3 +104,25 @@ def test_content_before_any_heading_goes_to_title_only_section():
 
 def test_empty_html_gives_no_chunks():
     assert chunk_html("<section></section>", "t", "C/S") == []
+
+
+def test_image_in_empty_paragraph_uses_previous_paragraph_as_caption():
+    html = '<section><h3>A</h3><p>설명 문단입니다.</p><p><img src="./images/x.png" alt="x"/></p></section>'
+    c = chunk_html(html, "t", "C/S")[0]
+    assert c.images == [Image(path="C/S/images/x.png", caption="설명 문단입니다.", alt="x")]
+    assert c.content == "t > A\n설명 문단입니다.\n[스크린샷 1: 설명 문단입니다.]"
+
+
+def test_image_in_table_cell_uses_cell_text_as_caption():
+    html = ('<section><h3>A</h3><table><tr><th>항목</th><th>화면</th></tr>'
+            '<tr><td>로그인 화면 <img src="./images/login.png"/></td><td>설명</td></tr></table></section>')
+    c = chunk_html(html, "t", "C/S")[0]
+    assert c.images[0].caption == "로그인 화면"
+
+
+def test_first_image_of_new_section_is_captioned_by_its_heading():
+    html = ('<section><h3>이전 절</h3><p>이전 문장</p>'
+            '<h3>새 절</h3><p><img src="./images/a.png"/></p><p>본문</p></section>')
+    cs = chunk_html(html, "t", "C/S")
+    assert cs[1].section_path == "새 절"
+    assert cs[1].images[0].caption == "새 절"
