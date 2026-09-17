@@ -15,7 +15,7 @@ doc_meta = {}
 TOP_K = 5
 
 # 리랭킹 프롬프트에 넣을 문서당 최대 글자 수. 후보 20건이면 약 14,000자.
-RERANK_DOC_CHARS = 700
+RERANK_DOC_CHARS = 900
 
 CANDIDATES = 20     # 벡터·BM25 각각 가져올 개수
 RERANK_KEEP = 12    # 점수 보정 후 리랭킹에 넘길 개수
@@ -133,29 +133,40 @@ def hybrid_search(query, intent="general", service=None, top_k=CANDIDATES, keep=
 
     return combine_scores(vector_hits, bm25_hits, intent, service, keep)
 
-def parse_scores(text, n):
-    """응답에서 마지막 숫자 배열을 찾아 길이가 n 이면 반환한다."""
-    for match in reversed(re.findall(r"\[[\d\s.,]*\]", text)):
-        values = [float(v) for v in re.findall(r"\d+(?:\.\d+)?", match)]
-        if len(values) == n:
-            return values
-    return None
+_ARRAY = re.compile(r"\[[\d\s.,]*\]")
 
-def rerank(query, docs, top_k=5):
-    """후보 전체를 한 번의 호출로 채점한다.
 
-    문서마다 따로 호출하면 질문 하나에 LLM 요청이 20번 가까이 나가고,
-    NIM 무료 한도에서 429 가 연달아 터진다. 한 프롬프트에 번호를 붙여 넣고
-    점수 배열 하나로 받는다. 파싱에 실패하면 검색 순서를 그대로 쓴다.
+def _numbers(array_text: str) -> list[float]:
+    return [float(v) for v in re.findall(r"\d+(?:\.\d+)?", array_text)]
+
+
+def parse_rerank(text: str, n: int):
+    """응답의 마지막 두 숫자 배열을 (점수, 근거) 로 읽는다. 둘 다 길이 n 일 때만 돌려준다.
+
+    순서는 프롬프트가 고정한다: 점수 줄이 먼저, 근거 줄이 나중.
     """
-    if len(docs) <= top_k:
-        return docs
+    arrays = _ARRAY.findall(text)
+    if len(arrays) < 2:
+        return None
 
-    listing = "\n\n".join(
-        f"[{i}] {d[:RERANK_DOC_CHARS]}" for i, d in enumerate(docs)
-    )
+    scores = _numbers(arrays[-2])
+    grounded_raw = _numbers(arrays[-1])
+    if len(scores) != n or len(grounded_raw) != n:
+        return None
+    return scores, [v >= 1 for v in grounded_raw]
 
-    prompt = f"""질문과 각 문서의 관련도를 0~10 점으로 평가해.
+
+def rerank(query, docs, top_k=TOP_K):
+    """후보 전체를 추론 끈 한 번의 호출로 채점하고, 답이 있는 문서인지도 함께 받는다.
+
+    반환: (상위 문서, grounded). grounded 는 상위 문서 중 '근거 있음' 이 하나라도 있으면 True,
+    하나도 없으면 False, 응답을 못 읽었으면 None (검색 순서를 그대로 쓴다).
+    """
+    if not docs:
+        return [], False
+
+    listing = "\n\n".join(f"[{i}] {d[:RERANK_DOC_CHARS]}" for i, d in enumerate(docs))
+    prompt = f"""질문과 각 문서의 관련도를 0~10 점으로 평가하고, 그 문서만으로 질문에 답할 수 있는지(1/0)도 표시해.
 
 질문:
 {query}
@@ -163,22 +174,23 @@ def rerank(query, docs, top_k=5):
 문서 목록 ({len(docs)}건):
 {listing}
 
-문서 번호 순서대로 점수만 담은 JSON 배열 하나만 출력해. 설명은 쓰지 마.
-출력 형식: [점수0, 점수1, ..., 점수{len(docs) - 1}]
+아래 두 줄만 출력해. 설명은 쓰지 마.
+점수: [점수0, 점수1, ..., 점수{len(docs) - 1}]
+근거: [답가능0, 답가능1, ..., 답가능{len(docs) - 1}]
 """
 
     try:
-        # Nemotron 은 추론 토큰을 먼저 소비하므로 본문이 잘리지 않게 여유를 둔다.
-        scores = parse_scores(chat(prompt, temperature=0.0, max_tokens=4096), len(docs))
+        parsed = parse_rerank(chat(prompt, temperature=0.0, max_tokens=512, think=False), len(docs))
     except Exception as e:
         print(f"  [리랭킹 실패] {type(e).__name__}: {e} → 검색 순서 사용")
-        scores = None
+        parsed = None
 
-    if scores is None:
-        return docs[:top_k]
+    if parsed is None:
+        return docs[:top_k], None
 
-    order = sorted(range(len(docs)), key=lambda i: scores[i], reverse=True)
-    return [docs[i] for i in order[:top_k]]
+    scores, grounded = parsed
+    order = sorted(range(len(docs)), key=lambda i: scores[i], reverse=True)[:top_k]
+    return [docs[i] for i in order], any(grounded[i] for i in order)
 
 SYSTEM_PROMPT = (
     "너는 NHN Cloud 공식 문서를 근거로 답하는 기술 지원 어시스턴트다. "
@@ -255,7 +267,7 @@ def build_prompt(question, docs, history=None):
 
 
 def ask(question, history=None):
-    docs = search_docs(retrieval_query(question, history), service=None)  # 필요하면 "Compute"
+    docs, _ = search_docs(retrieval_query(question, history), service=None)  # 필요하면 "Compute"
 
     return chat(build_prompt(question, docs, history), system=SYSTEM_PROMPT, max_tokens=2048)
 
@@ -268,7 +280,7 @@ def langchain_search(query):
     # langchain 1.x 에서 langchain.schema 가 제거돼 langchain_core 로 옮겨졌다.
     from langchain_core.documents import Document
 
-    docs = search_docs(query)
+    docs, _ = search_docs(query)
     return [Document(page_content=d) for d in docs]
 
 def ask_langchain(question):

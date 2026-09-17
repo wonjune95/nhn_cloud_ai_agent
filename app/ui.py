@@ -190,12 +190,17 @@ if question:
                 docs = [c.content for c in candidates_found]
 
                 status.update(label=f"2/3 관련도 평가 ({len(docs)}건)")
-                docs = rag.rerank(search_q, docs, top_k=top_k)
+                docs, grounded = rag.rerank(search_q, docs, top_k=top_k)
 
                 label = f"3/3 답변 생성 · {intent} · {service or '서비스 미상'} · 검색 {time.time() - t0:.1f}초"
                 if search_q != question:
                     label += " · 이전 질문과 함께 검색"
                 status.update(label=label, state="complete")
+
+            if grounded is False:
+                st.caption("관련도 평가 결과 근거가 될 문서를 찾지 못했습니다. 답변은 참고만 하세요.")
+            elif grounded is None:
+                st.caption("관련도 확인 실패 — 검색 순서를 그대로 사용했습니다.")
 
             answer = st.write_stream(rag.answer_stream(question, docs, history))
             render_sources(docs, rag)
