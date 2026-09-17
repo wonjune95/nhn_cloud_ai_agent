@@ -6,6 +6,7 @@ docs.nhncloud.com 페이지 본문의 첫 <h2>는 "Compute > Virtual Desktop > �
 """
 
 import re
+from urllib.parse import unquote, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -51,6 +52,33 @@ def extract_breadcrumb(html: str) -> list[str] | None:
     return parse_breadcrumb(text)
 
 
-def fallback_path(category: str, menu_name: str) -> str:
-    """브레드크럼이 없는 페이지는 메뉴 이름으로 저장한다."""
-    return f"{clean_name(category)}/{NO_SERVICE}/{clean_name(menu_name)}.html"
+def fallback_path(category: str, menu_name: str, service: str | None = None) -> str:
+    """브레드크럼이 없는 페이지는 메뉴 이름으로 저장한다.
+
+    URL 에서 서비스를 알아낼 수 있으면(url_service) 그 이름을 서비스 자리에 쓴다.
+    같은 카테고리의 서로 다른 서비스가 모두 NO_SERVICE 자리에서 겹치는 것을 막는다.
+    """
+    service_part = clean_name(service) if service else NO_SERVICE
+    return f"{clean_name(category)}/{service_part}/{clean_name(menu_name)}.html"
+
+
+def url_service(url: str) -> str | None:
+    """'/ko/{Category}/{Service}/ko/...' 형태면 URL 디코딩한 Service 를, 아니면 None."""
+    segments = [s for s in urlparse(url).path.split("/") if s]
+    if len(segments) >= 5 and segments[0] == "ko" and segments[3] == "ko":
+        return clean_name(unquote(segments[2]))
+    return None
+
+
+def url_slug(url: str) -> str:
+    """URL 경로의 마지막 비어있지 않은 조각(디코딩, clean_name 적용). 없으면 'index'."""
+    segments = [s for s in urlparse(url).path.split("/") if s]
+    if not segments:
+        return "index"
+    return clean_name(unquote(segments[-1]))
+
+
+def disambiguate(rel_path: str, slug: str) -> str:
+    """'A/B/문서.html' + 'api-guide-v3.0' -> 'A/B/문서 (api-guide-v3.0).html'"""
+    root, ext = rel_path.rsplit(".", 1)
+    return f"{root} ({slug}).{ext}"

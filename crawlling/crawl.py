@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from crawlling.manifest import (  # noqa: E402
     STATUS_ERROR, STATUS_NO_BREADCRUMB, STATUS_OK, Entry, Manifest, content_hash, now_iso,
 )
-from crawlling.paths import doc_path, extract_breadcrumb, fallback_path  # noqa: E402
+from crawlling.paths import (  # noqa: E402
+    disambiguate, doc_path, extract_breadcrumb, fallback_path, url_service, url_slug,
+)
 
 START_URL = "https://docs.nhncloud.com/ko/quickstarts/ko/overview/"
 CONTENT_SELECTOR = "section.page__content-wrapper"
@@ -150,7 +152,7 @@ def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> st
     """페이지 하나를 저장하고 manifest 에 기록한다. 결과 상태 문자열을 돌려준다."""
     prev = manifest.get(task["url"])
 
-    if prev and prev.status == STATUS_OK and not (args.changed or args.force):
+    if prev and prev.status in (STATUS_OK, STATUS_NO_BREADCRUMB) and not (args.changed or args.force):
         return "skip"
 
     section = fetch_section(driver, task["url"], args.sleep)
@@ -159,7 +161,12 @@ def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> st
 
     raw = str(section)
     digest = content_hash(raw)
-    if args.changed and prev and prev.status == STATUS_OK and prev.content_hash == digest:
+    if (
+        args.changed
+        and prev
+        and prev.status in (STATUS_OK, STATUS_NO_BREADCRUMB)
+        and prev.content_hash == digest
+    ):
         return "unchanged"
 
     crumbs = extract_breadcrumb(raw)
@@ -167,8 +174,12 @@ def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> st
         rel = doc_path(crumbs)
         status = STATUS_OK
     else:
-        rel = fallback_path(task["category"], task["name"])
+        rel = fallback_path(task["category"], task["name"], service=url_service(task["url"]))
         status = STATUS_NO_BREADCRUMB
+
+    owner = manifest.by_path().get(rel)
+    if owner is not None and owner.url != task["url"] and owner.status in (STATUS_OK, STATUS_NO_BREADCRUMB):
+        rel = disambiguate(rel, url_slug(task["url"]))
 
     doc_dir = os.path.join(save_dir, os.path.dirname(rel))
     os.makedirs(doc_dir, exist_ok=True)
