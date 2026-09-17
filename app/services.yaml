@@ -1,0 +1,36 @@
+# 수동 별칭. services.generated.yaml 이 못 잡는 약칭·한글 표기. 검색 단계에서 둘을 합쳐 읽는다.
+Network/VPC:
+  - 브이피씨
+  - 서브넷
+  - 라우팅 테이블
+Network/Load Balancer:
+  - LB
+  - 로드밸런서
+  - 로드 밸런서
+Network/Security Groups:
+  - 보안 그룹
+  - 보안그룹
+  - 시큐리티 그룹
+  - SG
+Network/Floating IP:
+  - 플로팅 IP
+  - 플로팅IP
+  - 유동 IP
+Network/NAT Gateway:
+  - NAT 게이트웨이
+  - NAT
+Network/Internet Gateway:
+  - 인터넷 게이트웨이
+Network/Peering Gateway:
+  - 피어링 게이트웨이
+  - 피어링
+Network/VPN Gateway(Site-to-Site VPN):
+  - VPN 게이트웨이
+  - VPN
+Network/Traffic Mirroring:
+  - 트래픽 미러링
+Network/DNS Plus:
+  - DNS
+Network/Network ACL:
+  - 네트워크 ACL
+  - ACL
