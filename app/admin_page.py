@@ -11,16 +11,6 @@ def _pct(v: float) -> str:
 
 
 def page():
-    # AppTest.from_function 은 이 함수의 소스 텍스트만 떼어내 별도 스크립트로 실행한다
-    # (모듈 상단의 import 는 딸려오지 않는다) — 그래서 함수 안에서 다시 import 한다.
-    # get_conn 은 테스트가 admin_page.get_conn 을 몽키패치하므로, 모듈을 통해 참조해야
-    # 패치가 반영된다 (bare get_conn() 은 이 스크립트에 바인딩된 이름이 없다).
-    import pandas as pd
-    import streamlit as st
-
-    import admin_stats as s
-    import admin_page as _self
-
     st.markdown(
         '<div class="nhn-header"><div class="nhn-logo">NHN</div>'
         '<div><div class="nhn-title">관리자</div>'
@@ -31,7 +21,7 @@ def page():
     since = s.since_for(period)
 
     try:
-        conn = _self.get_conn()
+        conn = get_conn()
     except Exception as e:
         st.error("DB 에 연결하지 못했습니다.")
         st.caption(f"{type(e).__name__}: {e}")
@@ -56,24 +46,24 @@ def page():
     c[2].metric("응답 중앙값", f"{summary['median_s']}초")
     c[3].metric("응답 최대", f"{summary['max_s']}초")
     c = st.columns(4)
-    c[0].metric("LLM 오류율", _self._pct(summary["error_rate"]))
-    c[1].metric("미확인 비율", _self._pct(summary["ungrounded_rate"]))
+    c[0].metric("LLM 오류율", _pct(summary["error_rate"]))
+    c[1].metric("미확인 비율", _pct(summary["ungrounded_rate"]))
     c[2].metric("👍", f"{summary['up']}")
     c[3].metric("👎", f"{summary['down']}")
 
     st.subheader("서비스별")
     st.dataframe(pd.DataFrame(services, columns=["서비스", "질문 수", "👎", "미확인"]),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 
     st.subheader("최근 👎 질문")
     st.dataframe(pd.DataFrame(down, columns=["시각", "질문", "서비스", "답변(앞 200자)"]),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
     st.subheader("미확인으로 끝난 질문")
     st.dataframe(pd.DataFrame(ungrounded, columns=["시각", "질문", "서비스"]),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
     st.subheader(f"{s.SLOW_MS // 1000}초 초과 질문")
     st.dataframe(pd.DataFrame(slow, columns=["시각", "질문", "소요(ms)"]),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 
     st.subheader("인덱스")
     last = index["last_ingested_at"]

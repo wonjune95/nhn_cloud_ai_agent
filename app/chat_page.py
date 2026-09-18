@@ -161,7 +161,7 @@ def page():
         chosen = st.selectbox("서비스", [AUTO] + services, help="자동이면 질문에서 서비스를 추정합니다.")
         top_k = st.slider("참고 문서 수", 3, 10, 5)
         st.divider()
-        if st.button("대화 초기화", use_container_width=True):
+        if st.button("대화 초기화", width="stretch"):
             st.session_state.messages = []
             st.session_state.pop("last_service", None)
             for k in [k for k in st.session_state if str(k).startswith("fb_")]:
@@ -185,7 +185,7 @@ def page():
         )
         cols = st.columns(2)
         for i, ex in enumerate(EXAMPLES):
-            if cols[i % 2].button(ex, key=f"ex_{i}", use_container_width=True):
+            if cols[i % 2].button(ex, key=f"ex_{i}", width="stretch"):
                 st.session_state.pending = ex
                 st.rerun()
 

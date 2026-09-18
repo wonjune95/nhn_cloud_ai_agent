@@ -168,7 +168,7 @@ def test_admin_page_renders_metrics_with_fake_stats(monkeypatch):
     monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
     monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 100, "services": 7, "last_ingested_at": None})
 
-    at = AppTest.from_function(admin_page.page, default_timeout=30)
+    at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
     at.run()
     assert not at.exception
     assert any(m.value == "12" for m in at.metric)
