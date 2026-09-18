@@ -1,6 +1,8 @@
 """eval/scoring.py 의 채점 규칙. 파이프라인은 돌리지 않는다."""
 import importlib.util
+import os
 import pathlib
+import sys
 
 _spec = importlib.util.spec_from_file_location(
     "scoring", pathlib.Path(__file__).resolve().parents[2] / "eval" / "scoring.py")
@@ -72,6 +74,21 @@ def test_render_table_mentions_every_question_and_summary():
     results = [_res("console", id=1, hit5=True, menu_ok=True, shots_ok=False, elapsed_s=12.3)]
     text = scoring.render_table(results, scoring.summarize(results))
     assert "| 1 |" in text and "12.3" in text and "적중" in text
+
+
+def test_run_eval_sys_path_finds_rag_and_skips_main(capsys):
+    """run_eval.py 를 importlib 으로 로드만 해도(스크립트로 실행하지 않아도) rag.py 를
+    찾을 수 있는 디렉터리가 sys.path 에 들어가야 한다 (로컬 저장소 레이아웃과
+    파드 레이아웃 둘 다). import 시점에 main() 이 돌아가서는 안 된다."""
+    spec = importlib.util.spec_from_file_location(
+        "run_eval", pathlib.Path(__file__).resolve().parents[2] / "eval" / "run_eval.py")
+    run_eval = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_eval)
+
+    assert any(os.path.isfile(os.path.join(p, "rag.py")) for p in sys.path)
+
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
 
 
 def test_questions_file_shape():

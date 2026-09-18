@@ -1,6 +1,11 @@
 """평가 30문항 러너 (스펙 5-6). UI 파드 안에서 돌린다:
     kubectl -n nhn-docs-bot cp eval/ <ui-pod>:/app/eval/ && kubectl -n nhn-docs-bot exec <ui-pod> -- python -u eval/run_eval.py
 로컬:  cd app && DB_HOST=localhost python ../eval/run_eval.py --questions ../eval/questions.yaml
+
+rag 등을 찾는 위치는 배치 방식에 따라 다르다:
+  - 로컬 저장소:  <repo>/eval/run_eval.py, rag.py 는 <repo>/app/ 밑            → dirname(HERE)/app
+  - 파드(kubectl cp eval/ 후): /app/eval/run_eval.py, rag.py 는 /app/ 바로 밑   → dirname(HERE) 자체
+둘 다 존재 여부를 확인해서 있는 쪽만 sys.path 에 넣는다.
 결과는 markdown 표로 stdout 에 찍는다. 기준 미달이면 exit 1.
 """
 import argparse
@@ -11,8 +16,13 @@ import time
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)                                   # scoring
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "app"))  # rag 등 (파드에서는 /app 이 cwd)
+sys.path.insert(0, HERE)  # scoring
+
+# rag 등 (로컬 저장소 레이아웃과 파드 레이아웃 둘 다 지원)
+for _i, _cand in enumerate(
+    c for c in (os.path.join(os.path.dirname(HERE), "app"), os.path.dirname(HERE)) if os.path.isdir(c)
+):
+    sys.path.insert(1 + _i, _cand)
 
 import scoring  # noqa: E402
 
