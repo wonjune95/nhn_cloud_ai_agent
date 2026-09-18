@@ -12,9 +12,11 @@ st.set_page_config(
 st.markdown(CSS, unsafe_allow_html=True)
 
 import chat_page  # noqa: E402  (set_page_config 가 먼저여야 한다)
+import admin_page  # noqa: E402
 
 PAGES = [
     st.Page(chat_page.page, title="챗", icon="💬", default=True),
+    st.Page(admin_page.page, title="관리자", icon="📊", url_path="admin"),
 ]
 
 st.navigation(PAGES).run()

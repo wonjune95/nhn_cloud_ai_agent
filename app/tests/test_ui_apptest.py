@@ -152,3 +152,25 @@ def test_reset_clears_feedback_state(app):
     assert not at.session_state.messages
     assert "fb_q42" not in at.session_state
     assert not any("의견 감사합니다" in c.value for c in at.caption)
+
+
+def test_admin_page_renders_metrics_with_fake_stats(monkeypatch):
+    import admin_stats as s
+    import admin_page
+
+    monkeypatch.setattr(admin_page, "get_conn", lambda: object())
+    monkeypatch.setattr(s, "summary", lambda conn, since: {
+        "questions": 12, "sessions": 4, "median_s": 9.5, "max_s": 31.0,
+        "error_rate": 0.25, "ungrounded_rate": 0.5, "up": 3, "down": 2})
+    monkeypatch.setattr(s, "by_service", lambda conn, since: [("Network/VPC", 5, 2, 1)])
+    monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [])
+    monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
+    monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
+    monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 100, "services": 7, "last_ingested_at": None})
+
+    at = AppTest.from_function(admin_page.page, default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert any(m.value == "12" for m in at.metric)
+    assert any("25%" in m.value for m in at.metric)
+    assert any("Network/VPC" in str(d.value) for d in at.dataframe)
