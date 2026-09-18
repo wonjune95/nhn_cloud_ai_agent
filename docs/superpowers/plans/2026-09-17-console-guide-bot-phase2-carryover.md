@@ -35,9 +35,9 @@
 ## 2단계-B 설계에 반영
 - **`Candidate`가 `section_path`·`images`·`source_url`을 들고 온다** (스펙 4-4 완료). 답변·스크린샷 렌더링·`questions.sources` 로그는 이 객체를 그대로 쓴다. `rerank(query, docs: list[str])` 문자열 래퍼는 UI 전환 후 제거. — 2B-1 에서 처리
 - **DB `pgdata`가 NFS(`sc-nas-cicd`)에 있음** — Postgres에 권장되지 않음. 블록 스토리지 StorageClass가 생기면 이전(재적재 ~15분).
-- **`ingest.py`는 문서 하나라도 실패하면 exit 1** → Job이 Failed로 표시되고 backoff 재시도를 소모. 부분 실패는 경고로 두고 exit 0, 실패 목록만 남기는 편이 운영에 맞음.
+- **`ingest.py`는 문서 하나라도 실패하면 exit 1** → Job이 Failed로 표시되고 backoff 재시도를 소모. 부분 실패는 경고로 두고 exit 0, 실패 목록만 남기는 편이 운영에 맞음. — 2B-2 에서 처리
 - **`--changed` 재수집 시 `unchanged` 페이지에도 manifest 저장** — 쓰기 횟수 축소.
-- **Dockerfile**: root 실행, `HEALTHCHECK` 없음.
+- **Dockerfile**: root 실행, `HEALTHCHECK` 없음. — 2B-2 에서 처리
 - **`init_schema`의 RuntimeError 경로에서 cursor 미닫힘**.
 
 ## 검색 품질 튜닝 후보 (평가 30문항 결과를 보고)

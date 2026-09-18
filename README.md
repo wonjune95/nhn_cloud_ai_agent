@@ -10,7 +10,9 @@ Streamlit UI에서 질문에 대해 근거 문서를 찾아 답하는 RAG 챗봇
 
 - Python 3.12
 - Docker Desktop (pgvector 컨테이너 실행용)
-- Chrome (크롤러가 Selenium + webdriver-manager 로 headless 구동)
+- Chrome (크롤러가 Selenium + webdriver-manager 로 headless 구동) — 로컬/윈도우에서
+  직접 돌릴 때만 필요하다. 크롤러 컨테이너(`crawlling/Dockerfile`)는 Chromium을
+  이미지에 함께 설치하므로 클러스터(CronJob)에서 돌릴 때는 따로 준비할 게 없다.
 
 ## 설치
 
@@ -211,10 +213,17 @@ UI pod 안(NVIDIA NIM 무료 티어, 리랭킹은 추론 끔)에서 측정한 �
 - UI Deployment 는 `enableServiceLinks: false` 를 준다 — 이름이 `db` 인 Service 가
   있으면 쿠버네티스가 `DB_PORT=tcp://…` 환경변수를 자동 주입해 앱이 쓰는 `DB_PORT`
   와 충돌하기 때문이다.
-- 아직 공개 ingress 는 없다. UI 는 배스천을 통해 포트포워딩으로 접속한다:
-  ```
-  ssh POC-BASTION -L 8501:127.0.0.1:18501 "kubectl -n nhn-docs-bot port-forward svc/ui 18501:8501"
-  ```
+- 공개 접속: `https://nhn-docs-bot.180-210-89-135.nip.io` (`deploy/k8s/httproute.yaml`, Traefik
+  Gateway 를 통한 HTTPRoute). 인증은 없다 — 링크를 아는 사람은 누구나 챗·관리자 페이지에
+  접속할 수 있다. 인증을 붙이는 방법(Traefik `basicAuth` Middleware)은 `httproute.yaml`
+  주석에 있다.
+- 이미지는 두 개다: 앱 `nhn-docs-bot`(`app/Dockerfile`, 비root uid 1000 — UI·ingest·refresh
+  CronJob 의 ingest 단계가 공용)와 크롤러 `nhn-docs-crawler`(`crawlling/Dockerfile`, 빌드
+  컨텍스트는 저장소 루트). 태그는 `2b-<git 짧은 해시>` 형식을 쓴다.
+- 배포 순서: 이미지 빌드·푸시 → `kubectl apply -f deploy/k8s/rbac.yaml -f
+  deploy/k8s/httproute.yaml -f deploy/k8s/refresh-cronjob.yaml`(CronJob 은 apply 전에 이미지
+  태그를 sed 로 바꾼다) → `kubectl -n nhn-docs-bot set image deploy/ui ui=<이미지>:<태그>` →
+  `kubectl -n nhn-docs-bot rollout status deploy/ui`.
 
 ### 운영 런북
 
@@ -264,4 +273,69 @@ kubectl -n nhn-docs-bot rollout status deploy/ui
 
 청킹 로직이나 프롬프트 형식이 바뀌었으면 Job 의 `args` 에 `"--rebuild"` 를 넣는다
 (증분 적재는 HTML 해시만 본다). UI Deployment 는 `strategy: Recreate` 라 옛 파드가
-먼저 내려간 뒤 새 파드가 올라온다(인덱싱이 겹치지 않게).
+먼저 내려간 뒤 새 파드가 올라온다(인덱싱이 겹치지 않게). 전체 재적재를 수동으로
+다시 돌려야 하면 `deploy/k8s/ingest-job.yaml` 의 `args` 에 `--rebuild` 를 넣고 위
+Job 을 그대로 재실행한다.
+
+**정기 재수집** (`deploy/k8s/refresh-cronjob.yaml`, CronJob `refresh`). 매월 1일
+03:00 KST 에 자동으로 돈다: initContainer `fix-perms`(NFS 는 `fsGroup` 을 적용하지
+않아 uid 1000 이 쓸 수 있게 `chown` 한 번 맞춘다, 실패해도 계속 진행) → `crawl`
+(`--changed`, 바뀐 페이지만 저장) → `ingest`(증분 적재) 순서로 실행되고, 마지막
+컨테이너 `restart` 가 `kubectl rollout restart deploy/ui` 로 UI 를 재시작한다(RBAC은
+`deploy/k8s/rbac.yaml` 의 `ServiceAccount refresh` — Deployment `get`/`patch` 만 허용).
+UI 재시작 중 새벽 30~60초 정도 챗이 끊긴다. 수동 실행과 로그 확인:
+
+```
+kubectl -n nhn-docs-bot create job --from=cronjob/refresh refresh-manual-$(date +%m%d)
+kubectl -n nhn-docs-bot logs -f job/refresh-manual-<월일> -c fix-perms
+kubectl -n nhn-docs-bot logs -f job/refresh-manual-<월일> -c crawl
+kubectl -n nhn-docs-bot logs -f job/refresh-manual-<월일> -c ingest
+kubectl -n nhn-docs-bot logs -f job/refresh-manual-<월일> -c restart
+```
+
+크롤은 850페이지라 1시간 넘게 걸릴 수 있다. `crawl` 컨테이너가 실패하면
+`backoffLimit: 0`/`restartPolicy: Never` 라 Job 은 그대로 Failed 로 남고 자동
+재시도는 없다 — UI 는 옛 코퍼스로 계속 서비스된다(무영향). `ingest` 단계는 문서
+일부가 실패해도 exit 0(전체 실패거나 DB/API 오류일 때만 실패로 끝난다). 전체
+재적재가 필요하면 `deploy/k8s/ingest-job.yaml` 에 `--rebuild` 를 넣어 별도로 돌린다
+(CronJob 의 `ingest` 는 증분만 한다).
+
+**API 키 교체.** NVIDIA API 키를 바꿀 때는 시크릿을 갈아 끼우고 UI 를 재시작한다:
+
+```
+kubectl -n nhn-docs-bot create secret generic llm --from-literal=NVIDIA_API_KEY=<새 키> \
+    --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n nhn-docs-bot rollout restart deploy/ui
+```
+
+키 값은 저장소나 문서 어디에도 평문으로 남기지 않는다.
+
+**주 1회 점검 체크리스트** (관리자 페이지 `/admin`):
+
+| 확인 항목 | 조치 |
+| --- | --- |
+| 👎 피드백 상위 서비스 | 해당 서비스 문서·별칭(`app/services.yaml`) 보강 |
+| 미확인(서비스 추정 실패) 질문 | 별칭 누락 확인 후 추가 |
+| 응답 30초 초과 질문 | NVIDIA NIM 상태(무료 티어 레이트리밋 등) 확인 |
+
+**평가.** 30문항 회귀 평가는 UI 파드 안에서 돌린다(로컬 검색·리랭킹·답변 경로를
+그대로 쓰기 때문에 파드 밖에서 돌리면 DB/네트워크 설정을 따로 맞춰야 한다):
+
+```
+kubectl -n nhn-docs-bot cp eval/ <ui-pod>:/app/eval/
+kubectl -n nhn-docs-bot exec <ui-pod> -- python -u eval/run_eval.py
+```
+
+기준(모두 만족해야 통과, 미달이면 exit 1): hit@5 ≥ 80%, 메뉴 경로 정확도 ≥ 90%,
+스크린샷 마커 정확도 ≥ 80%, 범위 밖 질문 거부 5/5, 응답 시간 중앙값 ≤ 15초·최댓값
+≤ 30초, 오류 0건. 미달 항목은
+`docs/superpowers/plans/2026-09-17-console-guide-bot-phase2-carryover.md` 의 튜닝
+후보를 참고해 조정한 뒤 재측정한다.
+
+#### 평가 결과
+
+(2B-2 배포 후 컨트롤러가 결과 표를 붙인다)
+
+**백업은 없다.** `pgdata`(문서 벡터), `questions`(질문 로그·피드백) 모두 별도
+백업을 두지 않는다. 문서 벡터는 재적재로 복구되지만, 질문 로그와 피드백은
+재적재로 되살아나지 않는다 — 사라지면 그걸로 끝이다.
