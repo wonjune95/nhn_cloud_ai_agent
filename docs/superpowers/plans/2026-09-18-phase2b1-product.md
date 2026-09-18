@@ -981,6 +981,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ```python
 """Streamlit AppTest 로 챗 화면 배선을 검사한다. DB·LLM 은 전부 가짜다."""
+import types
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -1001,7 +1003,7 @@ def fake_index(monkeypatch, calls):
     monkeypatch.setattr(rag, "build_bm25", lambda: 3)
     monkeypatch.setattr(rag, "ALIASES", {"vpc": "Network/VPC", "오브젝트": "Storage/Object Storage"})
     monkeypatch.setattr(db, "migrate", lambda conn: None)
-    monkeypatch.setattr(chat_page, "get_conn", lambda: None, raising=False)
+    monkeypatch.setattr(db, "get_conn", lambda: types.SimpleNamespace(close=lambda: None))
 
     def hybrid(query, intent="general", service=None, top_k=20):
         calls.append(("search", query, intent, service))
