@@ -131,7 +131,8 @@ def render_assistant(msg):
         if msg.get("grounded") is None and not msg.get("error"):
             st.caption("관련도 확인 실패 — 검색 순서를 그대로 사용했습니다.")
         render_answer(msg["content"], msg.get("image_map"))
-        if msg.get("grounded") is not False:
+        # 실패한 턴은 cands 를 로그용으로만 들고 있다 — 기록을 다시 그릴 때도 출처를 보이면 안 된다.
+        if msg.get("grounded") is not False and not msg.get("error"):
             render_sources(msg.get("cands") or [])
         feedback_buttons(msg.get("question_id"))
 

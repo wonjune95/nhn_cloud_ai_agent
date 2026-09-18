@@ -174,6 +174,25 @@ def test_answer_failure_is_shown_and_logged(app, monkeypatch):
         "source_url": "https://x/", "service": "Network/VPC",
     }]
 
+    # 기록을 다시 그릴 때(rerun)도 실패한 턴은 cands 를 갖고 있지만 출처를 보이면 안 된다.
+    at.run()
+    assert not at.exception
+    assert not any("참고한 문서" in e.label for e in at.expander)
+
+
+def test_feedback_buttons_show_caption_when_question_id_is_none(app, monkeypatch):
+    """로그 저장이 실패(question_id 없음)하면 버튼 대신 안내 문구만 보인다 (스펙 6절)."""
+    import qlog
+
+    at, calls = app
+    monkeypatch.setattr(qlog, "log_question", lambda **kw: calls.append(("log", kw)) or None)
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+
+    assert any("저장 실패" in c.value for c in at.caption)
+    assert not any(b.label == "👍" for b in at.button)
+
 
 def test_reset_clears_feedback_state(app):
     """'대화 초기화' 는 fb_* 상태까지 지운다 (순번 재사용으로 남의 평가를 물려받지 않게)."""
