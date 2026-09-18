@@ -93,3 +93,62 @@ def test_not_grounded_skips_llm(app, monkeypatch):
     assert any("제공된 문서에서 확인되지 않습니다" in m.value for m in at.markdown)
     log = next(c for c in calls if c[0] == "log")[1]
     assert log["grounded"] is False
+    # 근거가 없으면 출처를 보여 주지도, 로그에 남기지도 않는다.
+    assert log["sources"] == []
+    assert not any("참고한 문서" in e.label for e in at.expander)
+
+
+def test_markers_become_images(app, monkeypatch, tmp_path):
+    """{{img:N}} 이 실제 파일을 가리키면 st.image 로 그린다 (스펙 3-4)."""
+    import chat_page
+
+    png = tmp_path / "Network" / "VPC" / "images"
+    png.mkdir(parents=True)
+    # 1x1 투명 PNG.
+    (png / "a.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
+
+    at, _calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+
+    assert len(at.image) >= 1
+    assert any("캡" in c for img in at.image for c in img.captions)
+    assert all("{{img:" not in m.value for m in at.markdown)
+
+
+def test_answer_failure_is_shown_and_logged(app, monkeypatch):
+    """모델 호출이 터져도 화면은 살아 있고, 오류가 로그에 남는다."""
+    def boom(question, cands, history=None, intent="general"):
+        raise RuntimeError("503")
+
+    at, calls = app
+    monkeypatch.setattr(rag, "answer_stream", boom)
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+
+    assert any("모델 서버가 일시적으로 혼잡해" in m.value for m in at.markdown)
+    log = next(c for c in calls if c[0] == "log")[1]
+    assert "503" in log["error"]
+    assert log["sources"] == []
+
+
+def test_reset_clears_feedback_state(app):
+    """'대화 초기화' 는 fb_* 상태까지 지운다 (순번 재사용으로 남의 평가를 물려받지 않게)."""
+    at, calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    next(b for b in at.button if b.label == "👎").click().run()
+    assert any("의견 감사합니다" in c.value for c in at.caption)
+
+    next(b for b in at.button if b.label == "대화 초기화").click().run()
+    assert not at.exception
+    assert not at.session_state.messages
+    assert "fb_q42" not in at.session_state
+    assert not any("의견 감사합니다" in c.value for c in at.caption)

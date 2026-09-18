@@ -86,13 +86,22 @@ def render_sources(cands):
             )
 
 
-def feedback_buttons(idx, question_id):
+def feedback_key(question_id):
+    """피드백 상태는 메시지 순번이 아니라 질문 id 로 건다.
+
+    순번으로 걸면 '대화 초기화' 뒤 순번이 0 부터 다시 시작해, 새 답변이 지워진
+    대화의 '의견 감사합니다' 를 물려받고 평가 자체가 불가능해진다.
+    """
+    return f"fb_q{question_id}"
+
+
+def feedback_buttons(question_id):
     """👍/👎. 누르면 바로 저장하고 자리에 결과 문구를 남긴다."""
-    key = f"fb_{idx}"
+    if question_id is None:
+        return
+    key = feedback_key(question_id)
     if key in st.session_state:
         st.caption(st.session_state[key])
-        return
-    if question_id is None:
         return
     up, down, _ = st.columns([1, 1, 8])
     if up.button("👍", key=f"{key}_up"):
@@ -106,7 +115,7 @@ def _save_feedback(key, question_id, value):
     st.rerun()
 
 
-def render_assistant(idx, msg):
+def render_assistant(msg):
     with st.chat_message("assistant", avatar="☁️"):
         service_tag(msg.get("service"), msg.get("intent", "general"))
         if msg.get("grounded") is None and not msg.get("error"):
@@ -114,7 +123,7 @@ def render_assistant(idx, msg):
         render_answer(msg["content"], msg.get("image_map"))
         if msg.get("grounded") is not False:
             render_sources(msg.get("cands") or [])
-        feedback_buttons(idx, msg.get("question_id"))
+        feedback_buttons(msg.get("question_id"))
 
 
 # ---------------------------------------------------------------- 페이지
@@ -155,6 +164,8 @@ def page():
         if st.button("대화 초기화", use_container_width=True):
             st.session_state.messages = []
             st.session_state.pop("last_service", None)
+            for k in [k for k in st.session_state if str(k).startswith("fb_")]:
+                st.session_state.pop(k, None)
             st.rerun()
 
     if not ready:
@@ -178,11 +189,11 @@ def page():
                 st.session_state.pending = ex
                 st.rerun()
 
-    for idx, msg in enumerate(st.session_state.messages):
+    for msg in st.session_state.messages:
         if msg["role"] == "user":
             user_bubble(msg["content"])
         else:
-            render_assistant(idx, msg)
+            render_assistant(msg)
 
     typed = st.chat_input("NHN Cloud 콘솔 사용법을 질문하세요")
     question = typed or st.session_state.pending
@@ -200,6 +211,7 @@ def answer_question(rag, question, chosen, top_k):
     cands, image_map, grounded = [], {}, None
     service, intent, search_q = None, "general", question
     answer, failed, error_text = "", False, None
+    holder = None
 
     with st.chat_message("assistant", avatar="☁️"):
         try:
@@ -207,11 +219,14 @@ def answer_question(rag, question, chosen, top_k):
                 search_q = rag.retrieval_query(question, history)
                 intent = rag.detect_intent(question)
                 if chosen != AUTO:
+                    # 드롭다운으로 고른 서비스는 이어받기용 기억에 남기지 않는다.
+                    # (다시 '자동' 으로 돌아왔을 때 그 선택을 물려받으면 안 된다.)
                     service = chosen
                 else:
                     service = rag.detect_service(search_q, rag.ALIASES, fallback=st.session_state.get("last_service"))
-                st.session_state.last_service = service
-                status.update(label=f"1/3 하이브리드 검색 · {INTENT_LABEL[intent]} · {service or '서비스 미상'}")
+                    st.session_state.last_service = service
+                status.update(
+                    label=f"1/3 하이브리드 검색 · {INTENT_LABEL.get(intent, intent)} · {service or '서비스 미상'}")
                 found = rag.hybrid_search(search_q, intent=intent, service=service, top_k=CANDIDATES)
                 status.update(label=f"2/3 관련도 평가 ({len(found)}건)")
                 cands, grounded = rag.rerank_candidates(search_q, found, top_k=top_k)
@@ -238,6 +253,8 @@ def answer_question(rag, question, chosen, top_k):
             answer = "⚠️ 모델 서버가 일시적으로 혼잡해 답변을 만들지 못했습니다. 잠시 후 다시 질문해 주세요."
             failed, error_text = True, f"{type(e).__name__}: {e}"
             cands, image_map = [], {}
+            if holder is not None:
+                holder.empty()  # 도중까지 흘러나온 본문이 오류 문구 위에 남지 않게 지운다.
             st.markdown(answer)
             st.caption(error_text)
 
@@ -246,7 +263,7 @@ def answer_question(rag, question, chosen, top_k):
             service=service, intent=intent, grounded=grounded, elapsed_ms=int((time.time() - t0) * 1000),
             sources=qlog.sources_of(cands), answer=answer, error=error_text,
         )
-        feedback_buttons(len(st.session_state.messages), question_id)
+        feedback_buttons(question_id)
 
     st.session_state.messages.append({
         "role": "assistant", "content": answer, "cands": cands, "image_map": image_map,
