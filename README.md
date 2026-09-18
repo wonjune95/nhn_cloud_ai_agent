@@ -75,13 +75,25 @@ python -m streamlit run ui.py
 ```
 python -m pytest                                          # 단위 테스트 (DB/API 불필요)
 DB_HOST=localhost python -m pytest -m integration app/tests/test_ingest_db.py
+DB_HOST=localhost python -m pytest -m integration app/tests/test_qlog_db.py
+DB_HOST=localhost python -m pytest -m integration app/tests/test_admin_stats_db.py
 ```
 
 통합 테스트는 `.env` 의 `NVIDIA_API_KEY` 와, `docker compose up -d db` 로 띄운
 pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragdb_test` 데이터베이스를
 따로 만들어 쓴다(`app/tests/test_ingest_db.py` 의 `test_db` 픽스처가 없으면 만들고
 `db.DB_NAME` 을 그쪽으로 돌린다) — 통합 테스트를 실행해도 `ragdb` 의 실데이터는
-그대로 남는다.
+그대로 남는다. `app/tests/test_qlog_db.py`(질문 로그 기록·조회)와
+`app/tests/test_admin_stats_db.py`(관리자 지표 집계 SQL)도 같은 `test_db` 픽스처를
+쓰는 통합 테스트다.
+
+`.env` 를 셸에 실제로 로드하지 않으면 `test_ingest_db.py` 등에서 `NVIDIA_API_KEY`
+가 비어 실패한다 — Git Bash 에서는 `set -a && . ./.env && set +a` 로 먼저 값을
+환경변수로 내보낸 뒤 pytest 를 돌린다(파이썬이 `.env` 를 자동으로 읽어오지 않는다).
+
+`app/tests/test_ui_apptest.py` 는 Streamlit 의 `AppTest` 로 챗/관리자 페이지를
+구동하는 단위 테스트다(DB 없이 DB 접근 함수를 가짜로 바꿔 넣는다) — `python -m pytest`
+에 포함되며 DB 나 API 키가 필요 없다.
 
 ## 코퍼스 현황
 
@@ -142,6 +154,23 @@ pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragd
    (문서당 900자, 0~10 점수와 "이 문서만으로 답 가능한가"(1/0) 근거 판정을 함께
    받는다). 점수 상위 5건(`TOP_K`)만 답변 프롬프트에 넣는다.
 5. 질문당 LLM 호출은 총 2회(리랭킹 1 + 답변 1)다.
+
+## UI
+
+`app/ui.py` 는 `st.navigation` 으로 두 페이지를 띄운다: 챗(`/`, `app/chat_page.py`)과
+관리자(`/admin`, `app/admin_page.py`). 관리자 페이지는 별도 인증이 없다 — 링크를 아는
+사람은 누구나 지표를 볼 수 있다.
+
+| 구분 | 내용 |
+| --- | --- |
+| 답변 형식(콘솔 절차 질문) | 첫 줄에 메뉴 경로, 이어서 번호가 매겨진 단계. 각 단계 끝에 해당 스크린샷을 인라인으로 붙인다(`{{img:N}}` 마커). 문서에 스크린샷이 실제로 있을 때만 붙이고, 없으면 생략한다. |
+| 사이드바 | 서비스 선택(`자동` 또는 목록에서 고정 선택), "참고 문서 수" 슬라이더(리랭킹 후 프롬프트에 넣을 문서 수). |
+| 피드백 | 답변마다 👍/👎 버튼이 있고 누르면 `questions.feedback` 에 기록된다. |
+| 질문 로그 | 질문 1건당 `questions` 테이블에 1행이 쌓인다(세션 id·질문·답변·검색 질의·근거·피드백 등, 사용자를 식별할 수 있는 정보는 남기지 않는다). 새로 추가된 컬럼(`questions.session_id`/`answer`/`retrieval_query`, `documents.ingested_at`)은 `db.migrate` 가 UI 기동 시점에 멱등하게 추가한다 — 재적재 없이 스키마만 갱신된다. |
+| 스크린샷 경로 | `DOCS_DIR` 환경변수(기본값: 저장소 루트의 `nhn_cloud_docs`, 컨테이너 안에서는 `/docs`) 아래에서 `Candidate.images` 의 상대 경로를 읽어 보여준다. |
+
+관리자 페이지(`/admin`)는 기간(7일/30일/전체)을 고를 수 있고, 전체 지표·서비스별 표,
+최근 👎/미확인/응답 30초 초과 질문 목록, 인덱스 상태를 보여준다.
 
 ## 지연 측정
 

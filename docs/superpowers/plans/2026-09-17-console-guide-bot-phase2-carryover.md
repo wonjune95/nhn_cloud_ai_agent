@@ -33,7 +33,7 @@
 2단계-A(`feature/phase2a-search`)에서 처리한 것: 중첩 표/코드, 표 행 분할, `Image.missing`, `has_breadcrumb`, halfvec 인덱스, 삭제 문서 정리, 재수집 실패 시 ok 항목 보존, manifest 손상 복구, 경로 충돌 방지, 중복 청크 오귀속(후보에 메타 직접 전달), 별칭 사전 재생성·한글 시드. 아래는 2단계-B 로 넘긴다.
 
 ## 2단계-B 설계에 반영
-- **`Candidate`가 `section_path`·`images`·`source_url`을 들고 온다** (스펙 4-4 완료). 답변·스크린샷 렌더링·`questions.sources` 로그는 이 객체를 그대로 쓴다. `rerank(query, docs: list[str])` 문자열 래퍼는 UI 전환 후 제거.
+- **`Candidate`가 `section_path`·`images`·`source_url`을 들고 온다** (스펙 4-4 완료). 답변·스크린샷 렌더링·`questions.sources` 로그는 이 객체를 그대로 쓴다. `rerank(query, docs: list[str])` 문자열 래퍼는 UI 전환 후 제거. — 2B-1 에서 처리
 - **DB `pgdata`가 NFS(`sc-nas-cicd`)에 있음** — Postgres에 권장되지 않음. 블록 스토리지 StorageClass가 생기면 이전(재적재 ~15분).
 - **`ingest.py`는 문서 하나라도 실패하면 exit 1** → Job이 Failed로 표시되고 backoff 재시도를 소모. 부분 실패는 경고로 두고 exit 0, 실패 목록만 남기는 편이 운영에 맞음.
 - **`--changed` 재수집 시 `unchanged` 페이지에도 manifest 저장** — 쓰기 횟수 축소.
