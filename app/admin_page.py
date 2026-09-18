@@ -23,20 +23,24 @@ def page():
         return
     period = st.radio("기간", s.PERIODS, horizontal=True, index=1)
     since = s.since_for(period)
+    q = st.text_input("질문 검색", placeholder="질문에 포함된 단어")
 
-    # 스키마 보장(get_conn 포함) 부터 지표 집계 SQL 여섯 건까지 한 try 로 묶는다 —
+    # 스키마 보장(get_conn 포함) 부터 지표 집계 SQL 까지 한 try 로 묶는다 —
     # 마이그레이션 전 DB(2B 컬럼 없음)에서 s.* 호출이 UndefinedColumn 으로 터져도
-    # 트레이스백 대신 배너로 보여준다.
+    # 트레이스백 대신 배너로 보여준다. 검색어가 바뀌면 다시 열려야 하므로
+    # 위젯은 먼저 읽고, 검색 쿼리도 이 try 안에서 실행한다.
     conn = None
     try:
         schema_ready.ensure_schema()
         conn = get_conn()
         summary = s.summary(conn, since)
         services = s.by_service(conn, since)
+        daily = s.daily(conn, since)
         down = s.recent_down(conn, since)
         ungrounded = s.recent_ungrounded(conn, since)
         slow = s.recent_slow(conn, since)
         index = s.index_status(conn)
+        found = s.search(conn, since, q)
     except Exception as e:
         st.error("DB 에서 지표를 읽지 못했습니다.")
         st.caption(f"{type(e).__name__}: {e}")
@@ -59,13 +63,34 @@ def page():
     c[2].metric("👍", f"{summary['up']}")
     c[3].metric("👎", f"{summary['down']}")
 
+    st.subheader("일별 추이")
+    if not daily:
+        st.info("기간 안에 질문이 없습니다")
+    else:
+        df = pd.DataFrame(daily, columns=["일자", "질문 수", "응답 중앙값(초)", "👎"]).set_index("일자")
+        st.line_chart(df[["질문 수"]])
+        st.line_chart(df[["응답 중앙값(초)"]])
+        st.bar_chart(df[["👎"]])
+
     st.subheader("서비스별")
     st.dataframe(pd.DataFrame(services, columns=["서비스", "질문 수", "👎", "미확인"]),
                  width="stretch", hide_index=True)
 
     st.subheader("최근 👎 질문")
-    st.dataframe(pd.DataFrame(down, columns=["시각", "질문", "서비스", "답변(앞 200자)"]),
-                 width="stretch", hide_index=True)
+    if not down:
+        st.info("👎 받은 질문이 없습니다")
+    else:
+        for asked_at, question, service, _answer200, answer_full, sources in down:
+            with st.expander(f"{asked_at:%m-%d %H:%M} · {question[:40]} · {service or '-'}"):
+                st.markdown(answer_full)
+                st.json(sources)
+
+    if q:
+        st.subheader("검색 결과")
+        st.dataframe(
+            pd.DataFrame(found, columns=["시각", "질문", "서비스", "근거", "피드백"]),
+            width="stretch", hide_index=True)
+
     st.subheader("미확인으로 끝난 질문")
     st.dataframe(pd.DataFrame(ungrounded, columns=["시각", "질문", "서비스"]),
                  width="stretch", hide_index=True)

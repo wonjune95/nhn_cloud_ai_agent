@@ -60,9 +60,30 @@ def by_service(conn, since) -> list[tuple[str, int, int, int]]:
     return [(r[0], int(r[1]), int(r[2]), int(r[3])) for r in rows]
 
 
+def daily(conn, since) -> list[tuple]:
+    rows = _rows(conn, f"""
+        SELECT (asked_at AT TIME ZONE 'Asia/Seoul')::date AS d,
+               count(*),
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY elapsed_ms),
+               count(*) FILTER (WHERE feedback = -1)
+          FROM questions WHERE {_SINCE}
+         GROUP BY 1 ORDER BY 1""", {"since": since})
+    return [(r[0], int(r[1]), round(float(r[2] or 0) / 1000, 1), int(r[3])) for r in rows]
+
+
+def search(conn, since, text, limit=50) -> list[tuple]:
+    text = (text or "").strip()
+    if not text:
+        return []
+    return _rows(conn, f"""
+        SELECT asked_at, question, service, grounded, feedback
+          FROM questions WHERE {_SINCE} AND question ILIKE %(pat)s
+         ORDER BY asked_at DESC LIMIT %(limit)s""", {"since": since, "pat": f"%{text}%", "limit": limit})
+
+
 def recent_down(conn, since, limit=20):
     return _rows(conn, f"""
-        SELECT asked_at, question, service, left(coalesce(answer, ''), 200)
+        SELECT asked_at, question, service, left(coalesce(answer, ''), 200), coalesce(answer, ''), sources
           FROM questions WHERE {_SINCE} AND feedback = -1
          ORDER BY asked_at DESC LIMIT %(limit)s""", {"since": since, "limit": limit})
 

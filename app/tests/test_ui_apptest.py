@@ -278,10 +278,12 @@ def test_admin_page_renders_metrics_with_fake_stats(monkeypatch):
         "questions": 12, "sessions": 4, "median_s": 9.5, "max_s": 31.0,
         "error_rate": 0.25, "ungrounded_rate": 0.5, "up": 3, "down": 2})
     monkeypatch.setattr(s, "by_service", lambda conn, since: [("Network/VPC", 5, 2, 1)])
+    monkeypatch.setattr(s, "daily", lambda conn, since: [])
     monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
     monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 100, "services": 7, "last_ingested_at": None})
+    monkeypatch.setattr(s, "search", lambda conn, since, text, limit=50: [])
 
     at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
     at.run()
@@ -324,10 +326,12 @@ def _fake_admin_stats(monkeypatch):
         "questions": 12, "sessions": 4, "median_s": 9.5, "max_s": 31.0,
         "error_rate": 0.25, "ungrounded_rate": 0.5, "up": 3, "down": 2})
     monkeypatch.setattr(s, "by_service", lambda conn, since: [("Network/VPC", 5, 2, 1)])
+    monkeypatch.setattr(s, "daily", lambda conn, since: [])
     monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
     monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 100, "services": 7, "last_ingested_at": None})
+    monkeypatch.setattr(s, "search", lambda conn, since, text, limit=50: [])
 
 
 def test_admin_page_open_when_admin_token_is_empty(monkeypatch):
@@ -369,6 +373,29 @@ def test_admin_page_requires_token_when_admin_token_is_set(monkeypatch):
     assert not at.exception
     at.run()
     assert any(m.value == "12" for m in at.metric)
+
+
+def test_admin_search_calls_search_and_shows_chart(monkeypatch):
+    import admin_stats as s, admin_page, schema_ready, admin_auth
+    from datetime import date, datetime, timezone
+    calls = []
+    monkeypatch.setattr(admin_auth, "required_token", lambda: "")
+    monkeypatch.setattr(schema_ready, "ensure_schema", lambda: None)
+    monkeypatch.setattr(admin_page, "get_conn", lambda: types.SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(s, "summary", lambda conn, since: {"questions": 1, "sessions": 1, "median_s": 1.0, "max_s": 1.0, "error_rate": 0.0, "ungrounded_rate": 0.0, "up": 0, "down": 1})
+    monkeypatch.setattr(s, "by_service", lambda conn, since: [])
+    monkeypatch.setattr(s, "daily", lambda conn, since: [(date.today(), 1, 1.0, 1)])
+    monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [(datetime.now(timezone.utc), "q", "Network/VPC", "짧은", "긴 답변 전문", [])])
+    monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
+    monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
+    monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 1, "services": 1, "last_ingested_at": None})
+    monkeypatch.setattr(s, "search", lambda conn, since, text, limit=50: calls.append(text) or [])
+    at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert any("긴 답변 전문" in m.value for m in at.markdown)
+    at.text_input[0].set_value("서브넷").run()
+    assert "서브넷" in calls
 
 
 def test_source_card_html_numbers_and_links():
