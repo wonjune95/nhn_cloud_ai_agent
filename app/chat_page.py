@@ -19,10 +19,8 @@ DOCS_DIR = os.getenv(
 )
 
 EXAMPLES = [
-    "VPC에 서브넷을 추가하는 방법",
-    "로드 밸런서를 생성하는 절차",
-    "플로팅 IP를 인스턴스에 연결하는 방법",
-    "Object Storage에 컨테이너를 만드는 방법",
+    "DNS Plus에서 레코드 세트를 생성하는 방법", "SMS 발신 번호를 등록하는 절차",
+    "인스턴스를 생성하는 방법", "Cloud Monitoring에서 대시보드를 생성하는 방법",
 ]
 INTENT_LABEL = {"console": "콘솔 절차", "general": "일반"}
 AUTO = "자동"
@@ -159,21 +157,32 @@ def feedback_key(question_id):
     return f"fb_q{question_id}"
 
 
-def feedback_buttons(question_id):
-    """👍/👎. 누르면 바로 저장하고 자리에 결과 문구를 남긴다."""
+def feedback_buttons(question_id, question=None, seq=0):
+    """👍/👎 와 다시 생성. 누르면 바로 저장하고 자리에 결과 문구를 남긴다.
+
+    다시 생성 은 같은 question 을 pending 에 넣고 rerun 해 새 답변을 뒤에 덧붙인다
+    (이전 답변은 지우지 않는다) — question 이 있을 때만 그린다.
+    """
     if question_id is None:
         # 로그 저장(qlog.log_question)이 실패해 id 가 없으면 피드백을 걸 자리가 없다 (스펙 6절).
         st.caption("저장 실패 — 피드백을 기록할 수 없습니다")
+        if question:
+            if st.button("다시 생성", key=f"regen_s{seq}"):
+                st.session_state.pending = question
+                st.rerun()
         return
     key = feedback_key(question_id)
     if key in st.session_state:
         st.caption(st.session_state[key])
         return
-    up, down, _ = st.columns([1, 1, 8])
+    up, down, regen, _ = st.columns([1, 1, 2, 6])
     if up.button("👍", key=f"{key}_up"):
         _save_feedback(key, question_id, 1)
     if down.button("👎", key=f"{key}_down"):
         _save_feedback(key, question_id, -1)
+    if question and regen.button("다시 생성", key=f"regen_{key}"):
+        st.session_state.pending = question
+        st.rerun()
 
 
 def _save_feedback(key, question_id, value):
@@ -181,7 +190,7 @@ def _save_feedback(key, question_id, value):
     st.rerun()
 
 
-def render_assistant(msg):
+def render_assistant(msg, question=None):
     with st.chat_message("assistant", avatar="☁️"):
         service_tag(msg.get("service"), msg.get("intent", "general"))
         if msg.get("grounded") is None and not msg.get("error"):
@@ -190,7 +199,7 @@ def render_assistant(msg):
         # 실패한 턴은 cands 를 로그용으로만 들고 있다 — 기록을 다시 그릴 때도 출처를 보이면 안 된다.
         if msg.get("grounded") is not False and not msg.get("error"):
             render_sources(msg.get("cands") or [])
-        feedback_buttons(msg.get("question_id"))
+        feedback_buttons(msg.get("question_id"), question, msg.get("seq", 0))
 
 
 # ---------------------------------------------------------------- 페이지
@@ -250,17 +259,23 @@ def page():
             "<p>콘솔에서 어떻게 하는지 물어보세요. 메뉴 경로와 화면을 함께 안내합니다.</p></div>",
             unsafe_allow_html=True,
         )
+        st.markdown(
+            '<div class="nhn-hint">서비스 이름을 함께 쓰면 더 정확합니다 (예: VPC, Object Storage)</div>',
+            unsafe_allow_html=True,
+        )
         cols = st.columns(2)
         for i, ex in enumerate(EXAMPLES):
             if cols[i % 2].button(ex, key=f"ex_{i}", width="stretch"):
                 st.session_state.pending = ex
                 st.rerun()
 
+    last_user = None
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             user_bubble(msg["content"])
+            last_user = msg["content"]
         else:
-            render_assistant(msg)
+            render_assistant(msg, last_user)
 
     typed = st.chat_input("NHN Cloud 콘솔 사용법을 질문하세요")
     question = typed or st.session_state.pending
@@ -270,7 +285,10 @@ def page():
 
 
 def answer_question(rag, question, chosen, top_k):
-    history = list(st.session_state.messages)
+    # '다시 생성' 은 같은 질문을 다시 보낸다 — 직전에 같은 질문을 물은 적이 있으면
+    # rag.retrieval_query 의 후속 질문 판정(길이 20자 미만)이 그 질문 자체를 직전 질문으로
+    # 오인해 "질문 질문" 처럼 검색어를 두 번 붙인다. 같은 문구의 과거 질문은 맥락에서 뺀다.
+    history = [m for m in st.session_state.messages if not (m["role"] == "user" and m["content"] == question)]
     st.session_state.messages.append({"role": "user", "content": question})
     user_bubble(question)
 
@@ -341,7 +359,7 @@ def answer_question(rag, question, chosen, top_k):
             service=service, intent=intent, grounded=grounded, elapsed_ms=int((time.time() - t0) * 1000),
             sources=qlog.sources_of(cands), answer=answer, error=error_text,
         )
-        feedback_buttons(question_id)
+        feedback_buttons(question_id, question, seq)
 
     st.session_state.messages.append({
         "role": "assistant", "content": answer, "cands": cands, "image_map": image_map,

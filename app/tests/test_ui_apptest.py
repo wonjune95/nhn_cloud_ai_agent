@@ -49,7 +49,15 @@ def fake_index(monkeypatch, calls):
     monkeypatch.setattr(rag, "hybrid_search", hybrid)
     monkeypatch.setattr(rag, "rerank_candidates", rerank)
     monkeypatch.setattr(rag, "answer_stream", stream)
-    monkeypatch.setattr(qlog, "log_question", lambda **kw: calls.append(("log", kw)) or 42)
+    # 42 부터 호출마다 증가 — 한 대화에서 두 번 물으면(예: 다시 생성) 서로 다른 question_id 를 받는다.
+    # (실제 DB 는 매번 새 행을 만들어 자동으로 그렇다; 여기서는 흉내만 낸다.)
+    ids = iter(range(42, 10_000))
+
+    def log_question(**kw):
+        calls.append(("log", kw))
+        return next(ids)
+
+    monkeypatch.setattr(qlog, "log_question", log_question)
     monkeypatch.setattr(qlog, "set_feedback", lambda qid, v: calls.append(("feedback", qid, v)) or True)
     chat_page.load_index.clear()
 
@@ -434,3 +442,32 @@ def test_zoom_key_is_stable_per_question_and_image():
     assert chat_page.zoom_key(42, 1, 0) == "zoom_q42_1"
     assert chat_page.zoom_key(42, 1, 7) == "zoom_s7_1"
     assert chat_page.zoom_key(None, 2, 0) == "zoom_x_2"
+
+
+def test_examples_are_screenshot_rich_services():
+    import chat_page
+    assert chat_page.EXAMPLES == [
+        "DNS Plus에서 레코드 세트를 생성하는 방법", "SMS 발신 번호를 등록하는 절차",
+        "인스턴스를 생성하는 방법", "Cloud Monitoring에서 대시보드를 생성하는 방법",
+    ]
+
+
+def test_regenerate_reasks_same_question(app):
+    at, calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    searches = [c for c in calls if c[0] == "search"]
+    assert len(searches) == 1
+    regen = [b for b in at.button if b.label == "다시 생성"]
+    assert regen
+    regen[0].click().run()
+    searches = [c for c in calls if c[0] == "search"]
+    assert len(searches) == 2 and searches[1][1] == "서브넷 만드는 법"
+    # 이전 답변은 남고 새 답변이 붙는다
+    assert sum(1 for m in at.session_state["messages"] if m["role"] == "assistant") == 2
+
+
+def test_empty_screen_shows_hint(app):
+    at, _ = app
+    at.run()
+    assert any("서비스 이름을 함께 쓰면" in m.value for m in at.markdown)

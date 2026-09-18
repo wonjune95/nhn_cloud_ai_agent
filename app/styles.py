@@ -69,6 +69,7 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
   font-size: 1.5rem; font-weight: 700; color: var(--nhn-dark); margin: 0 0 0.5rem;
 }
 .nhn-empty p { color: var(--nhn-gray-700); font-size: 0.9rem; margin: 0; }
+.nhn-hint { text-align:center; font-size:0.8rem; color: var(--nhn-gray-700); margin-bottom: 1rem; }
 
 /* ---------- 채팅 버블 ---------- */
 [data-testid="stChatMessage"] {
