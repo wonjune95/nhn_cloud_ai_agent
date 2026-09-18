@@ -6,4 +6,5 @@ nhn_cloud_docs/
 nhn_cloud_docs_*/
 app/data/
 *.pkl
+*.log
 .claude/settings.local.json

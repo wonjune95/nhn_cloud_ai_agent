@@ -45,3 +45,16 @@ def test_run_refuses_docs_dir_without_manifest(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "manifest.json" in out
     assert "--allow-no-manifest" in out
+
+
+def test_load_manifest_gives_url_and_breadcrumb_flag(tmp_path):
+    import json
+    from ingest import load_manifest
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "https://d/a": {"path": "A/B/c.html", "url": "https://d/a", "breadcrumb": ["A", "B", "c"], "status": "ok"},
+        "https://d/b": {"path": "A/_/d.html", "url": "https://d/b", "breadcrumb": [], "status": "no_breadcrumb"},
+    }), encoding="utf-8")
+    m = load_manifest(str(tmp_path))
+    assert m["A/B/c.html"] == ("https://d/a", True)
+    assert m["A/_/d.html"] == ("https://d/b", False)
+    assert load_manifest(str(tmp_path / "없음")) == {}

@@ -1,0 +1,91 @@
+# 월 1회 재수집: crawl(--changed) → ingest(증분) → UI 재시작 (스펙 5-2).
+#   수동 실행:  kubectl -n nhn-docs-bot create job --from=cronjob/refresh refresh-manual-$(date +%m%d)
+#   진행 확인:  kubectl -n nhn-docs-bot logs job/<이름> -c crawl -f   (ingest, restart 도 같은 방식)
+# 이미지 태그는 배포 때 sed 로 바꾼다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: refresh
+  namespace: nhn-docs-bot
+spec:
+  schedule: "0 3 1 * *"
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 크롤이 실패하면 다음 달 또는 수동 실행으로 — 자동 재시도는 사이트에 부담만 준다.
+      backoffLimit: 0
+      # 크롤이 멈추면 6시간 뒤 실패 처리 — Forbid 가 다음 달 실행을 막지 않게.
+      activeDeadlineSeconds: 21600
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: refresh
+          enableServiceLinks: false
+          imagePullSecrets:
+            - name: regcred
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          initContainers:
+            # NFS 는 fsGroup 을 무시하므로 예전에 root 로 복사된 파일을 uid 1000 이 쓸 수 있게 한 번 맞춘다.
+            - name: fix-perms
+              image: harbor.114-110-181-178.nip.io/nnd/busybox:1.36
+              command: ["sh", "-c", "chown -R 1000:1000 /docs || echo '[경고] chown 실패 — NFS root_squash 인지 확인; crawl 이 쓰기 실패할 수 있음'"]
+              securityContext:
+                runAsUser: 0
+                runAsNonRoot: false
+              volumeMounts:
+                - name: docs
+                  mountPath: /docs
+            - name: crawl
+              image: harbor.114-110-181-178.nip.io/nnd/nhn-docs-crawler:latest
+              args: ["--changed", "--save-dir", "/docs"]
+              resources:
+                requests: { cpu: 500m, memory: 1Gi }
+                limits: { cpu: "2", memory: 3Gi }
+              volumeMounts:
+                - name: docs
+                  mountPath: /docs
+            - name: ingest
+              image: harbor.114-110-181-178.nip.io/nnd/nhn-docs-bot:latest
+              command: ["python", "-u", "ingest.py"]
+              args: ["--docs-dir", "/docs"]
+              env:
+                - { name: DB_HOST, value: db }
+                - { name: DB_PORT, value: "5432" }
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef: { name: db, key: POSTGRES_USER }
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: db, key: POSTGRES_PASSWORD }
+                - name: NVIDIA_API_KEY
+                  valueFrom:
+                    secretKeyRef: { name: llm, key: NVIDIA_API_KEY }
+              resources:
+                requests: { cpu: 250m, memory: 512Mi }
+                limits: { cpu: "1", memory: 2Gi }
+              volumeMounts:
+                - name: docs
+                  mountPath: /docs
+                  readOnly: true
+          containers:
+            # BM25 는 프로세스 메모리에 있어 재적재 뒤 UI 를 다시 띄워야 한다.
+            # 기본 이미지는 Harbor 에 미러해 둔 것을 쓴다 (bitnami/kubectl 태그는 Docker Hub 에서 내려갔다).
+            # 공식 registry.k8s.io/kubectl 은 distroless 라 셸이 없고 바이너리는 /bin/kubectl 이다.
+            - name: restart
+              image: harbor.114-110-181-178.nip.io/nnd/kubectl:v1.34.3
+              command: ["/bin/kubectl"]
+              args: ["-n", "nhn-docs-bot", "rollout", "restart", "deploy/ui"]
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { cpu: 200m, memory: 128Mi }
+          volumes:
+            - name: docs
+              persistentVolumeClaim:
+                claimName: docs

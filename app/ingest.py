@@ -54,12 +54,17 @@ def iter_documents(docs_dir: str) -> Iterator[str]:
                 yield rel.replace("\\", "/")
 
 
-def load_manifest_urls(docs_dir: str) -> dict[str, str]:
+def load_manifest(docs_dir: str) -> dict[str, tuple[str | None, bool]]:
+    """{상대 경로: (원본 URL, 브레드크럼 있음)}. manifest 가 없으면 {}."""
     path = os.path.join(docs_dir, "manifest.json")
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8") as f:
-        return {e["path"]: e["url"] for e in json.load(f).values() if e.get("path")}
+        entries = json.load(f).values()
+    return {
+        e["path"]: (e.get("url"), bool(e.get("breadcrumb")))
+        for e in entries if e.get("path")
+    }
 
 
 def file_hash(text: str) -> str:
@@ -72,7 +77,39 @@ def existing_hash(cur, source_path: str) -> str | None:
     return row[0] if row else None
 
 
-def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None) -> int:
+# 안전밸브: 이 수를 넘고 전체의 절반을 넘게 지우려 하면 정리를 건너뛴다.
+PRUNE_MIN_ROWS = 10
+
+
+def prune_missing(conn, seen_paths: list[str]) -> int:
+    """디스크에 더 이상 없는 문서의 행을 지운다. 지운 문서 수를 돌려준다.
+
+    크롤이 반만 끝났거나 문서 폴더가 잘못 마운트되면 멀쩡한 인덱스가 통째로 날아간다.
+    지울 문서가 전체의 절반을 넘으면(그리고 PRUNE_MIN_ROWS 보다 많으면) 사람이 볼 때까지 아무것도 지우지 않는다.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT count(DISTINCT source_path) FROM documents WHERE source_path <> ALL(%s)",
+            (seen_paths,),
+        )
+        stale = cur.fetchone()[0]
+        cur.execute("SELECT count(DISTINCT source_path) FROM documents")
+        total = cur.fetchone()[0]
+
+        if stale > PRUNE_MIN_ROWS and stale * 2 > total:
+            print(f"[경고] 정리 대상 {stale}/{total} 문서 — 절반 초과라 건너뜀 (문서 폴더가 비었는지 확인)")
+            return 0
+
+        if stale:
+            cur.execute("DELETE FROM documents WHERE source_path <> ALL(%s)", (seen_paths,))
+        conn.commit()
+        return stale
+    finally:
+        cur.close()
+
+
+def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None, has_breadcrumb=None) -> int:
     from chunker import chunk_html
     from llm import embed
 
@@ -81,7 +118,7 @@ def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None) -> int:
 
     category, service, doc_title = split_source_path(rel_path)
     doc_rel_dir = os.path.dirname(rel_path)
-    chunks = chunk_html(html, doc_title, doc_rel_dir)
+    chunks = chunk_html(html, doc_title, doc_rel_dir, has_breadcrumb=has_breadcrumb)
     digest = file_hash(html)
 
     cur = conn.cursor()
@@ -99,7 +136,8 @@ def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None) -> int:
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (chunk.content, vector, category, service, doc_type_of(doc_title), doc_title,
                      chunk.section_path, rel_path, url, digest,
-                     Json([{"path": i.path, "caption": i.caption, "alt": i.alt} for i in chunk.images])),
+                     Json([{"path": i.path, "caption": i.caption, "alt": i.alt, "missing": i.missing}
+                           for i in chunk.images])),
                 )
 
         conn.commit()   # 문서 단위 커밋: 중간에 끊겨도 앞 문서는 남는다
@@ -109,6 +147,7 @@ def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None) -> int:
 
 
 def run(argv=None) -> int:
+    # 종료 코드: 0 = 완료(일부 문서 실패 포함), 1 = 폴더/manifest 없음, DB 연결 실패, 임베딩 API 실패, 처리 대상 0건
     args = parse_args(argv)
     docs_dir = os.path.abspath(args.docs_dir)
     if not os.path.isdir(docs_dir):
@@ -125,21 +164,34 @@ def run(argv=None) -> int:
     from db import get_conn, init_schema
     from llm import EMBEDDING_MODEL_NAME, embed_one
 
-    urls = load_manifest_urls(docs_dir)
-    conn = get_conn()
+    manifest = load_manifest(docs_dir)
 
-    dim = len(embed_one("test"))
+    # 연결·인증 실패는 문서 실패와 다르다 — Job 이 Failed 로 남아야 사람이 본다 (스펙 5-3).
+    try:
+        conn = get_conn()
+    except Exception as e:
+        print(f"DB 연결 실패: {type(e).__name__}: {e}")
+        return 1
+    try:
+        dim = len(embed_one("test"))
+    except Exception as e:
+        print(f"임베딩 API 실패: {type(e).__name__}: {e}")
+        conn.close()
+        return 1
     print(f"임베딩 모델: {EMBEDDING_MODEL_NAME} (dim={dim}) / 문서 폴더: {docs_dir}")
     init_schema(conn, dim, rebuild=args.rebuild)
 
     done = skipped = 0
     total_chunks = 0
     failed: list[tuple[str, str]] = []
+    seen: list[str] = []
     cur = conn.cursor()
 
     for n, rel in enumerate(iter_documents(docs_dir), 1):
         if args.limit and n > args.limit:
             break
+
+        seen.append(rel)
 
         with open(os.path.join(docs_dir, rel), encoding="utf-8") as f:
             digest = file_hash(f.read())
@@ -148,7 +200,8 @@ def run(argv=None) -> int:
             continue
 
         try:
-            count = ingest_document(conn, docs_dir, rel, urls.get(rel))
+            url, has_crumb = manifest.get(rel, (None, None))
+            count = ingest_document(conn, docs_dir, rel, url, has_crumb)
         except Exception as e:
             conn.rollback()
             failed.append((rel, f"{type(e).__name__}: {e}"))
@@ -160,12 +213,22 @@ def run(argv=None) -> int:
         print(f"[{n}] {rel} → {count} chunks")
 
     cur.close()
+
+    # 0건 가드는 정리보다 먼저다 — 빈 폴더(크롤 실패, 잘못된 마운트)로 인덱스를 통째로 지우지 않는다.
+    if not seen:
+        conn.close()
+        print(f"처리할 문서가 없습니다: {docs_dir}")
+        return 1
+
+    pruned = prune_missing(conn, seen) if not args.limit else 0
+
     conn.close()
 
-    print(f"완료: 문서 {done}개 적재, {skipped}개 건너뜀, {len(failed)}개 실패 (청크 {total_chunks}개)")
+    print(f"완료: 문서 {done}개 적재, {skipped}개 건너뜀, {len(failed)}개 실패, {pruned}개 정리 (청크 {total_chunks}개)")
     for rel, err in failed:
         print(f"  - {rel}: {err}")
-    return 1 if failed else 0
+    # 일부 문서 실패는 경고로 둔다. 다음 실행이 미적재 문서만 다시 처리한다 (스펙 5-3).
+    return 0
 
 
 def parse_args(argv=None):

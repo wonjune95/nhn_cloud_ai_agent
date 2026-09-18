@@ -1,0 +1,39 @@
+# UI 를 Traefik Gateway 로 노출한다. (클러스터에 이미 있는 라우트를 저장소에 편입, 스펙 5-5)
+#
+# 인증을 붙일 때(스펙 8절 "다음 단계"): Traefik Middleware(basicAuth)를 만들고 아래 rules[0] 에
+# filters 를 추가한다. 예:
+#
+#   apiVersion: traefik.io/v1alpha1
+#   kind: Middleware
+#   metadata: { name: bot-auth, namespace: nhn-docs-bot }
+#   spec:
+#     basicAuth:
+#       secret: bot-auth-users     # htpasswd 형식의 'users' 키를 가진 Secret (수동 생성)
+#
+#   rules:
+#     - matches: [{ path: { type: PathPrefix, value: / } }]
+#       filters:
+#         - type: ExtensionRef
+#           extensionRef: { group: traefik.io, kind: Middleware, name: bot-auth }
+#       backendRefs: [...]
+#
+# /admin 만 먼저 막으려면 matches 를 path /admin 으로 한 rule 을 위에 두고 filters 를 붙인다.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: nhn-docs-route
+  namespace: nhn-docs-bot
+spec:
+  hostnames:
+    - nhn-docs-bot.180-210-89-135.nip.io
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: ui
+          port: 8501

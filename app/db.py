@@ -4,8 +4,27 @@ import psycopg2
 
 # 컨테이너 안에서는 서비스명 "db", 호스트(윈도우)에서 직접 돌릴 때는
 # DB_HOST=localhost 로 덮어쓴다. 5432 는 compose 에서 이미 공개돼 있다.
+DEFAULT_DB_PORT = 5432
+
+
+def _port(raw: str | None) -> int:
+    """DB_PORT 를 너그럽게 읽는다.
+
+    쿠버네티스는 이름이 'db' 인 Service 가 있으면 DB_PORT=tcp://10.x.x.x:5432 를
+    자동 주입한다(enableServiceLinks: false 로 막아 두었지만, 매니페스트 하나가
+    빠지면 다시 새어 들어온다). 숫자가 아니면 기본 포트로 되돌린다.
+    """
+    if raw is None:
+        return DEFAULT_DB_PORT
+    try:
+        return int(raw.strip())
+    except (AttributeError, ValueError):
+        print(f"  [경고] DB_PORT={raw!r} 를 숫자로 읽을 수 없어 {DEFAULT_DB_PORT} 를 씁니다.")
+        return DEFAULT_DB_PORT
+
+
 DB_HOST = os.getenv("DB_HOST", "db")
-DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_PORT = _port(os.getenv("DB_PORT"))
 DB_NAME = os.getenv("DB_NAME", "ragdb")
 DB_USER = os.getenv("DB_USER", "devops")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "devops")
@@ -23,14 +42,18 @@ def get_conn():
 
 def _has_column(cur, table: str, column: str) -> bool:
     cur.execute(
-        "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = %s AND column_name = %s AND table_schema = current_schema()",
         (table, column),
     )
     return cur.fetchone() is not None
 
 
 def _table_exists(cur, table: str) -> bool:
-    cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = %s", (table,))
+    cur.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = %s AND table_schema = current_schema()",
+        (table,),
+    )
     return cur.fetchone() is not None
 
 
@@ -44,6 +67,27 @@ def _embedding_dim(cur) -> int | None:
     if not row or row[0] is None or row[0] < 0:
         return None
     return row[0]
+
+
+def embedding_dim(conn) -> int | None:
+    """documents.embedding 의 선언 차원. 테이블이 없으면 None."""
+    cur = conn.cursor()
+    try:
+        if not _table_exists(cur, "documents"):
+            return None
+        return _embedding_dim(cur)
+    finally:
+        cur.close()
+
+
+HALFVEC_THRESHOLD = 2000   # pgvector 의 vector HNSW 상한. 넘으면 halfvec 표현식 인덱스를 쓴다.
+
+
+def vector_order_by(dim: int) -> str:
+    """벡터 검색 ORDER BY 식. 인덱스를 만든 표현식과 똑같아야 인덱스를 탄다."""
+    if dim > HALFVEC_THRESHOLD:
+        return f"(embedding::halfvec({dim})) <=> %s::halfvec({dim})"
+    return "embedding <=> %s::vector"
 
 
 def init_schema(conn, dim: int, rebuild: bool = False) -> None:
@@ -86,16 +130,22 @@ def init_schema(conn, dim: int, rebuild: bool = False) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS documents_service_doc_type ON documents (service, doc_type);")
     cur.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents (source_path);")
 
-    # HNSW 는 pgvector 0.5 이상. 구버전이면 인덱스 없이 순차 스캔으로 동작한다.
+    # vector 타입 HNSW 는 2000차원까지. 그 이상은 halfvec 표현식 인덱스(pgvector 0.7+).
     cur.execute("SAVEPOINT hnsw;")
     try:
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS documents_embedding_hnsw "
-            "ON documents USING hnsw (embedding vector_cosine_ops);"
-        )
+        if dim > HALFVEC_THRESHOLD:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS documents_embedding_hnsw "
+                f"ON documents USING hnsw ((embedding::halfvec({dim})) halfvec_cosine_ops);"
+            )
+        else:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS documents_embedding_hnsw "
+                "ON documents USING hnsw (embedding vector_cosine_ops);"
+            )
     except psycopg2.Error as e:
         cur.execute("ROLLBACK TO SAVEPOINT hnsw;")
-        print(f"  [경고] HNSW 인덱스를 만들지 못했습니다 (pgvector 버전 확인): {str(e).strip()}")
+        print(f"  [경고] HNSW 인덱스를 만들지 못했습니다 (pgvector 0.7 이상 필요): {str(e).strip()}")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS questions (
@@ -114,3 +164,35 @@ def init_schema(conn, dim: int, rebuild: bool = False) -> None:
 
     conn.commit()
     cur.close()
+
+    migrate(conn)
+
+
+# 2단계-B 에서 늘어난 컬럼. 재적재 없이 UI 기동 때 붙인다 (스펙 4-2).
+QUESTION_COLUMNS = (
+    ("session_id", "TEXT"),        # 브라우저 세션당 랜덤 UUID — 신원이 아니라 사용자 수 추정용
+    ("answer", "TEXT"),            # 👎 검토용 답변 전문
+    ("retrieval_query", "TEXT"),   # 대화 맥락을 합친 검색 질의
+)
+
+
+def migrate(conn) -> None:
+    """questions·documents 에 2B 컬럼을 멱등하게 추가한다. 테이블이 없으면 아무것도 하지 않는다.
+
+    ALTER TABLE ... ADD COLUMN IF NOT EXISTS 는 컬럼이 이미 있어도 ACCESS EXCLUSIVE
+    잠금을 잡는다. 매 UI 재기동마다 이 잠금을 잡으면 그 테이블에 열려 있는 다른
+    트랜잭션(예: idle in transaction 상태의 조회)과 맞물려 멈출 수 있으므로,
+    컬럼이 실제로 없을 때만 ALTER 를 실행한다 (IF NOT EXISTS 는 이중 방어로 남겨 둔다).
+    """
+    cur = conn.cursor()
+    try:
+        if _table_exists(cur, "questions"):
+            for col, typ in QUESTION_COLUMNS:
+                if not _has_column(cur, "questions", col):
+                    cur.execute(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {col} {typ}")
+        if _table_exists(cur, "documents"):
+            if not _has_column(cur, "documents", "ingested_at"):
+                cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ DEFAULT now()")
+        conn.commit()
+    finally:
+        cur.close()

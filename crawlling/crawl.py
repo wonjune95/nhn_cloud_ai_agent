@@ -14,8 +14,10 @@
 import argparse
 import hashlib
 import os
+import shutil
 import sys
 import time
+from dataclasses import replace
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -31,7 +33,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from crawlling.manifest import (  # noqa: E402
     STATUS_ERROR, STATUS_NO_BREADCRUMB, STATUS_OK, Entry, Manifest, content_hash, now_iso,
 )
-from crawlling.paths import doc_path, extract_breadcrumb, fallback_path  # noqa: E402
+from crawlling.paths import (  # noqa: E402
+    disambiguate, doc_path, extract_breadcrumb, fallback_path, url_service, url_slug,
+)
 
 START_URL = "https://docs.nhncloud.com/ko/quickstarts/ko/overview/"
 CONTENT_SELECTOR = "section.page__content-wrapper"
@@ -40,10 +44,20 @@ IMAGE_TIMEOUT = 10
 
 
 def build_driver() -> webdriver.Chrome:
+    """headless Chrome. 컨테이너에서는 CHROME_BIN/CHROMEDRIVER 가 가리키는 바이너리를,
+    로컬에서는 webdriver-manager 가 받은 드라이버를 쓴다 (둘 다 있을 때만 컨테이너 모드)."""
     opts = Options()
     for flag in ("--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"):
         opts.add_argument(flag)
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
+
+    chrome_bin = os.getenv("CHROME_BIN")
+    chromedriver = os.getenv("CHROMEDRIVER")
+    if chrome_bin and chromedriver:
+        opts.binary_location = chrome_bin
+        service = Service(chromedriver)
+    else:
+        service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=opts)
 
 
 def discover(driver) -> list[dict]:
@@ -146,11 +160,29 @@ def download_images(section, doc_dir: str, page_url: str, doc_name: str, refresh
     return ok, missing
 
 
+def _remove_old_document(save_dir: str, old_rel: str) -> None:
+    """브레드크럼이 바뀌어 저장 경로가 옮겨갈 때, 옛 파일과 그 이미지 폴더를 지운다.
+
+    지우지 않으면 같은 페이지가 두 경로에 남아 ingest 가 중복 청크를 만든다.
+    실패는 무시한다 — 정리는 실패해도 크롤 자체는 계속해야 한다.
+    """
+    old_path = os.path.join(save_dir, old_rel)
+    try:
+        os.remove(old_path)
+    except OSError:
+        pass
+
+    old_images = os.path.join(
+        os.path.dirname(old_path), "images", os.path.splitext(os.path.basename(old_rel))[0]
+    )
+    shutil.rmtree(old_images, ignore_errors=True)
+
+
 def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> str:
     """페이지 하나를 저장하고 manifest 에 기록한다. 결과 상태 문자열을 돌려준다."""
     prev = manifest.get(task["url"])
 
-    if prev and prev.status == STATUS_OK and not (args.changed or args.force):
+    if prev and prev.status in (STATUS_OK, STATUS_NO_BREADCRUMB) and not (args.changed or args.force):
         return "skip"
 
     section = fetch_section(driver, task["url"], args.sleep)
@@ -159,7 +191,12 @@ def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> st
 
     raw = str(section)
     digest = content_hash(raw)
-    if args.changed and prev and prev.status == STATUS_OK and prev.content_hash == digest:
+    if (
+        args.changed
+        and prev
+        and prev.status in (STATUS_OK, STATUS_NO_BREADCRUMB)
+        and prev.content_hash == digest
+    ):
         return "unchanged"
 
     crumbs = extract_breadcrumb(raw)
@@ -167,8 +204,15 @@ def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> st
         rel = doc_path(crumbs)
         status = STATUS_OK
     else:
-        rel = fallback_path(task["category"], task["name"])
+        rel = fallback_path(task["category"], task["name"], service=url_service(task["url"]))
         status = STATUS_NO_BREADCRUMB
+
+    owner = manifest.by_path().get(rel)
+    if owner is not None and owner.url != task["url"] and owner.status in (STATUS_OK, STATUS_NO_BREADCRUMB):
+        rel = disambiguate(rel, url_slug(task["url"]))
+
+    if prev is not None and prev.path and prev.path != rel:
+        _remove_old_document(save_dir, prev.path)
 
     doc_dir = os.path.join(save_dir, os.path.dirname(rel))
     os.makedirs(doc_dir, exist_ok=True)
@@ -207,17 +251,30 @@ def run(args) -> int:
                 result = save_task(task, driver, manifest, save_dir, args)
             except Exception as e:
                 prev = manifest.get(task["url"])
-                manifest.put(Entry(
-                    url=task["url"], path=prev.path if prev else "", breadcrumb=[],
-                    fetched_at=now_iso(), content_hash="", image_count=0,
-                    status=STATUS_ERROR, error=str(e)[:200],
-                ))
+                if prev is not None:
+                    # 이전에 제대로 받아 둔 기록이 있으면 그 내용(경로·해시·상태)을 지키고
+                    # 오류 메시지만 덧붙인다. status 를 error 로 덮으면 다음 실행이 이미
+                    # 멀쩡히 있는 문서를 다시 받고, ingest 는 원본 URL 을 잃는다.
+                    manifest.put(replace(prev, fetched_at=now_iso(), error=str(e)[:200]))
+                else:
+                    manifest.put(Entry(
+                        url=task["url"], path="", breadcrumb=[],
+                        fetched_at=now_iso(), content_hash="", image_count=0,
+                        status=STATUS_ERROR, error=str(e)[:200],
+                    ))
                 result = STATUS_ERROR
                 print(f"{label} 실패: {e}")
             else:
                 print(f"{label} → {result}")
             counts[result] = counts.get(result, 0) + 1
-            manifest.save()
+            if result != "skip":
+                try:
+                    manifest.save()
+                except OSError as e:
+                    print(f"  [경고] manifest 저장 실패(다음 페이지에서 다시 시도): {e}")
+        # 위에서 실패를 삼켰더라도(경고만 출력) 마지막에 한 번 더 시도해,
+        # 지속되는 저장 실패는 여기서 그대로 드러나게 한다.
+        manifest.save()
     finally:
         driver.quit()
 

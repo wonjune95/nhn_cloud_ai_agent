@@ -2,10 +2,13 @@ import pytest
 
 from crawlling.paths import (
     clean_name,
+    disambiguate,
     doc_path,
     extract_breadcrumb,
     fallback_path,
     parse_breadcrumb,
+    url_service,
+    url_slug,
 )
 
 
@@ -59,3 +62,45 @@ def test_extract_breadcrumb_returns_none_without_h2():
 
 def test_fallback_path():
     assert fallback_path("Compute", "콘솔 사용 가이드") == "Compute/_/콘솔 사용 가이드.html"
+
+
+def test_fallback_path_with_service_uses_it_instead_of_placeholder():
+    assert fallback_path("Security", "개요", service="Cloud Access") == "Security/Cloud Access/개요.html"
+
+
+def test_url_service_extracts_and_decodes_service_segment():
+    url = "https://docs.nhncloud.com/ko/Security/Cloud%20Access/ko/overview/"
+    assert url_service(url) == "Cloud Access"
+
+
+def test_url_service_none_for_non_service_shape_public_api():
+    url = "https://docs.nhncloud.com/ko/nhncloud/ko/public-api/service-api/"
+    assert url_service(url) is None
+
+
+def test_url_service_none_for_non_service_shape_quickstarts():
+    url = "https://docs.nhncloud.com/ko/quickstarts/ko/overview/"
+    assert url_service(url) is None
+
+
+def test_url_slug_is_last_path_segment_decoded():
+    url = "https://docs.nhncloud.com/ko/Database/RDS%20for%20MySQL/ko/api-guide-v3.0/"
+    assert url_slug(url) == "api-guide-v3.0"
+
+
+def test_url_slug_defaults_to_index_for_root():
+    assert url_slug("https://docs.nhncloud.com/") == "index"
+
+
+def test_disambiguate_inserts_slug_before_extension():
+    rel = "Database/RDS for MySQL/API 가이드.html"
+    assert disambiguate(rel, "api-guide-v3.0") == "Database/RDS for MySQL/API 가이드 (api-guide-v3.0).html"
+
+
+def test_disambiguate_without_extension_appends_slug():
+    assert disambiguate("Database/RDS for MySQL/API 가이드", "api-guide-v3.0") == \
+        "Database/RDS for MySQL/API 가이드 (api-guide-v3.0)"
+
+
+def test_disambiguate_uses_last_dot_only():
+    assert disambiguate("A/B/v1.2 가이드.html", "slug") == "A/B/v1.2 가이드 (slug).html"

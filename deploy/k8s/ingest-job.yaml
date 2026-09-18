@@ -1,0 +1,52 @@
+# 문서 코퍼스(/docs)를 pgvector 에 적재하는 일회성 Job.
+#   kubectl -n nhn-docs-bot delete job ingest --ignore-not-found
+#   kubectl -n nhn-docs-bot apply -f ingest-job.yaml
+# 증분 적재가 기본이다. 스키마가 바뀌었으면 args 에 "--rebuild" 를 넣는다.
+# 컨테이너는 uid 1000(app) 으로 뜬다. docs PVC 의 파일은 refresh CronJob 이 같은 uid 로 쓴다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest
+  namespace: nhn-docs-bot
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: OnFailure
+      # Service 'db' 때문에 DB_PORT=tcp://… 가 자동 주입되어 앱의 DB_PORT 와 충돌한다.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: ingest
+          image: harbor.114-110-181-178.nip.io/nnd/nhn-docs-bot:latest
+          command: ["python", "-u", "ingest.py"]
+          args: ["--docs-dir", "/docs"]
+          env:
+            - { name: DB_HOST, value: db }
+            - { name: DB_PORT, value: "5432" }
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: db, key: POSTGRES_USER }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db, key: POSTGRES_PASSWORD }
+            - name: NVIDIA_API_KEY
+              valueFrom:
+                secretKeyRef: { name: llm, key: NVIDIA_API_KEY }
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 2Gi }
+          volumeMounts:
+            - name: docs
+              mountPath: /docs
+              readOnly: true
+      volumes:
+        - name: docs
+          persistentVolumeClaim:
+            claimName: docs

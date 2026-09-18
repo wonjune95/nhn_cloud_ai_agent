@@ -1,0 +1,125 @@
+# 수동 별칭. services.generated.yaml 이 못 잡는 약칭·한글 표기. 검색 단계에서 둘을 합쳐 읽는다.
+Network/VPC:
+  - 브이피씨
+  - 서브넷
+  - 라우팅 테이블
+Network/Load Balancer:
+  - LB
+  - 로드밸런서
+  - 로드 밸런서
+Network/Security Groups:
+  - 보안 그룹
+  - 보안그룹
+  - 시큐리티 그룹
+  - SG
+Network/Floating IP:
+  - 플로팅 IP
+  - 플로팅IP
+  - 유동 IP
+Network/NAT Gateway:
+  - NAT 게이트웨이
+  - NAT
+Network/Internet Gateway:
+  - 인터넷 게이트웨이
+Network/Peering Gateway:
+  - 피어링 게이트웨이
+  - 피어링
+Network/VPN Gateway(Site-to-Site VPN):
+  - VPN 게이트웨이
+  - VPN
+Network/Traffic Mirroring:
+  - 트래픽 미러링
+Network/DNS Plus:
+  - DNS
+Network/Network ACL:
+  - 네트워크 ACL
+  - ACL
+
+# --- 콘솔 가이드 주요 서비스 한글 별칭 (2026-09-18 추가) ---
+# 문서 제목은 '콘솔 사용 가이드'·'API 가이드'처럼 서비스와 무관한 일반 명칭이라
+# 제목에서 별칭을 뽑을 수 없다. 그래서 여기에 손으로 적는다.
+# 키는 nhn_cloud_docs/ 아래 실제 폴더명(카테고리/서비스)과 정확히 같아야 한다.
+Compute/Instance:
+  - 인스턴스
+  - 가상 서버
+Compute/Image:
+  # '이미지' 단독은 뺐다 — 다른 서비스 질문("이미지 업로드", "이미지 매니저")에 걸린다.
+  - 인스턴스 이미지
+Compute/Image Builder:
+  - 이미지 빌더
+  - 이미지빌더
+Compute/Auto Scale:
+  - 오토스케일
+  - 오토 스케일
+  - 오토스케일링
+Storage/Object Storage:
+  - 오브젝트 스토리지
+  - 오브젝트스토리지
+Storage/Block Storage:
+  - 블록 스토리지
+  - 블록스토리지
+  - 볼륨
+Storage/NAS:
+  - 나스
+# Storage/Backup 은 수동 별칭을 두지 않는다 — '백업' 은 인스턴스·RDS·오브젝트
+# 스토리지 질문에도 그대로 나오는 일반어다. 자동 사전의 'Backup'/'backup' 으로 충분하다.
+Database/RDS for MySQL:
+  - RDS
+  - 마이에스큐엘
+  - 마이SQL
+Database/RDS for MariaDB:
+  - 마리아디비
+  - 마리아DB
+Database/RDS for MS-SQL:
+  - MSSQL
+  - 엠에스에스큐엘
+Container/NHN Kubernetes Service(NKS):
+  - NKS
+  - 쿠버네티스
+  - 엔케이에스
+Container/NHN Container Registry(NCR):
+  - NCR
+  - 컨테이너 레지스트리
+  - 컨테이너레지스트리
+Security/Secure Key Manager:
+  - SKM
+  - 시크릿 키 매니저
+  - 시큐어 키 매니저
+Security/Network-Firewall:
+  - 방화벽
+  - 네트워크 방화벽
+Security/WEB Firewall:
+  # '방화벽' 보다 길어서 웹 방화벽 질문은 이쪽이 이긴다 (가장 긴 별칭 우선).
+  - 웹 방화벽
+  - 웹방화벽
+Security/Cloud Access:
+  - 클라우드 액세스
+Management/Certificate Manager:
+  - 인증서
+  - 인증서 매니저
+Notification/SMS:
+  # '문자' 단독은 뺐다 — '문자열', '문자 인코딩' 같은 무관한 질문에 걸린다.
+  - 문자 발송
+  - 문자메시지
+  - 문자 메시지
+Notification/Email:
+  - 이메일
+Notification/Push:
+  - 푸시
+  - 푸시 알림
+Notification/KakaoTalk Bizmessage:
+  - 알림톡
+  - 카카오톡
+  - 친구톡
+Data & Analytics/Log & Crash Search:
+  # '로그' 단독은 뺐다 — '로그인' 이 그대로 걸린다.
+  - 로그 검색
+  - 로그앤크래시
+  - 로그 앤 크래시
+  - 크래시 리포트
+Bill/eTax:
+  - 전자세금계산서
+  - 세금계산서
+Content Delivery/CDN:
+  - CDN
+  - 씨디엔
