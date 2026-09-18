@@ -47,9 +47,10 @@ def run_one(q):
         service = rag.detect_service(q, rag.ALIASES)
         cands = rag.hybrid_search(q, intent=intent, service=service)
         t1 = time.time()
-        docs, grounded = rag.rerank(q, [c.content for c in cands])
+        docs, grounded = rag.rerank_candidates(q, cands)
         t2 = time.time()
-        answer = llm.chat(rag.build_prompt(q, docs), system=rag.SYSTEM_PROMPT, max_tokens=2048)
+        prompt, _ = rag.build_prompt(q, docs, intent=intent)
+        answer = llm.chat(prompt, system=rag.system_prompt(intent), max_tokens=2048)
         t3 = time.time()
         return dict(q=q, ok=True, search=t1 - t0, rerank=t2 - t1, answer=t3 - t2, total=t3 - t0,
                     grounded=grounded, chars=len(answer))

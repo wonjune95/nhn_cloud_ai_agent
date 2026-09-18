@@ -1,6 +1,6 @@
 """검색 인계(rerank_candidates / parse_rerank / build_prompt) 단위 테스트.
 
-DB 도 LLM 도 쓰지 않는다: rag.chat 을 가짜로 바꾸고 doc_meta/bm25_meta 를 직접 채운다.
+DB 도 LLM 도 쓰지 않는다: rag.chat 을 가짜로 바꾸고 bm25_meta 를 직접 채운다.
 """
 
 import rag
@@ -90,30 +90,6 @@ def test_rerank_candidates_empty_input():
     assert rag.rerank_candidates("질문", [], top_k=5) == ([], False)
 
 
-# ---------------------------------------------------------------- rerank (문자열 래퍼)
-
-def test_rerank_wrapper_returns_strings(monkeypatch):
-    monkeypatch.setattr(rag, "chat", fake_chat([1, 7], [1, 1]))
-    monkeypatch.setattr(rag, "doc_meta", {
-        "a 본문": ("Network/VPC/a.html", "Network/VPC", "console", "서브넷 생성"),
-        "b 본문": ("Storage/Object Storage/b.html", "Storage/Object Storage", "other", "업로드"),
-    })
-
-    docs, grounded = rag.rerank("질문", ["a 본문", "b 본문"], top_k=2)
-
-    assert docs == ["b 본문", "a 본문"]
-    assert all(isinstance(d, str) for d in docs)
-    assert grounded is True
-
-
-def test_rerank_wrapper_handles_unknown_content(monkeypatch):
-    monkeypatch.setattr(rag, "chat", fake_chat([5], [0]))
-    monkeypatch.setattr(rag, "doc_meta", {})
-    docs, grounded = rag.rerank("질문", ["처음 보는 본문"])
-    assert docs == ["처음 보는 본문"]
-    assert grounded is False
-
-
 # ---------------------------------------------------------------- parse_rerank
 
 def test_parse_rerank_prefers_labels_over_last_two_arrays():
@@ -141,37 +117,32 @@ def test_parse_rerank_wrong_length_returns_none():
 # ---------------------------------------------------------------- build_prompt
 
 def test_build_prompt_header_names_doc_and_section():
-    prompt = rag.build_prompt("VPC 서브넷 만드는 법", [cand("콘솔 사용 가이드")])
-
+    prompt, _ = rag.build_prompt("VPC 서브넷 만드는 법", [cand("콘솔 사용 가이드")])
     assert (
         "[문서 1] 서비스: Network/VPC · 문서: 콘솔 사용 가이드 · "
-        "섹션: 서브넷 생성 · 출처: Network/VPC/콘솔 사용 가이드.html"
+        "섹션: 서브넷 생성 · 출처: https://docs.nhncloud.com/ko/콘솔 사용 가이드/"
     ) in prompt
     assert "콘솔 사용 가이드 본문" in prompt
     assert "VPC 서브넷 만드는 법" in prompt
-    # 옛 머리말 형식은 더 이상 쓰지 않는다.
-    assert "(서비스:" not in prompt
 
 
 def test_build_prompt_numbers_documents_from_one():
-    prompt = rag.build_prompt("q", [cand("a"), cand("b")])
+    prompt, _ = rag.build_prompt("q", [cand("a"), cand("b")])
     assert "[문서 1]" in prompt and "[문서 2]" in prompt
-
-
-def test_build_prompt_accepts_strings_via_doc_meta(monkeypatch):
-    monkeypatch.setattr(rag, "doc_meta", {
-        "a 본문": ("Network/VPC/콘솔 사용 가이드.html", "Network/VPC", "console", "서브넷 생성"),
-    })
-    prompt = rag.build_prompt("q", ["a 본문"])
-    assert "문서: 콘솔 사용 가이드" in prompt
-    assert "섹션: 서브넷 생성" in prompt
 
 
 def test_build_prompt_includes_history():
     history = [{"role": "user", "content": "VPC 가 뭐야"}, {"role": "assistant", "content": "가상 네트워크다"}]
-    prompt = rag.build_prompt("그럼 서브넷은?", [cand("a")], history)
+    prompt, _ = rag.build_prompt("그럼 서브넷은?", [cand("a")], history)
     assert "이전 대화:" in prompt
     assert "사용자: VPC 가 뭐야" in prompt
+
+
+def test_build_prompt_falls_back_to_source_path_without_url():
+    c = cand("a")
+    c.source_url = None
+    prompt, _ = rag.build_prompt("q", [c])
+    assert "출처: Network/VPC/a.html" in prompt
 
 
 def test_system_prompt_warns_that_section_path_is_not_a_console_menu():
@@ -179,20 +150,96 @@ def test_system_prompt_warns_that_section_path_is_not_a_console_menu():
     assert "본문에 명시된 것만" in rag.SYSTEM_PROMPT
 
 
-# ---------------------------------------------------------------- bm25 인덱스 기반 귀속
+# ---------------------------------------------------------------- 그림 순번
 
-def test_bm25_hits_use_index_not_content_for_duplicate_chunks(monkeypatch):
-    """같은 본문이 두 문서에 있어도 BM25 히트는 자기 인덱스의 메타를 쓴다."""
-    dup = "같은 본문"
-    first = Candidate(content=dup, source_path="Network/VPC/a.html", service="Network/VPC",
-                      doc_type="console", score=0.0, section_path="A")
-    second = Candidate(content=dup, source_path="Storage/NAS/b.html", service="Storage/NAS",
-                       doc_type="other", score=0.0, section_path="B")
+def with_images(name, images):
+    c = cand(name)
+    c.images = images
+    return c
 
-    monkeypatch.setattr(rag, "bm25_corpus", [dup, dup])
-    monkeypatch.setattr(rag, "bm25_meta", [first, second])
-    # 본문 키 사전은 먼저 온 문서만 담는다 — 그래서 인덱스 기반이어야 한다.
-    monkeypatch.setattr(rag, "doc_meta", {dup: ("Network/VPC/a.html", "Network/VPC", "console", "A")})
 
-    assert rag.bm25_meta[1].source_path == "Storage/NAS/b.html"
-    assert rag._candidate(dup).source_path == "Network/VPC/a.html"
+def test_number_images_is_sequential_across_candidates_and_skips_missing():
+    a = with_images("a", [
+        {"path": "p/a1.png", "caption": "첫 화면", "alt": "", "missing": False},
+        {"path": "p/a2.png", "caption": "없는 그림", "alt": "", "missing": True},
+    ])
+    b = with_images("b", [{"path": "p/b1.png", "caption": "두 번째 문서 화면", "alt": "", "missing": False}])
+
+    image_map, per_cand = rag.number_images([a, b])
+
+    assert list(image_map) == [1, 2]
+    assert image_map[1] == rag.ImageRef(path="p/a1.png", caption="첫 화면")
+    assert image_map[2].path == "p/b1.png"
+    assert per_cand == [[1], [2]]
+
+
+def test_number_images_truncates_caption():
+    long = "가" * 100
+    a = with_images("a", [{"path": "p/a.png", "caption": long, "alt": "", "missing": False}])
+    image_map, _ = rag.number_images([a])
+    assert image_map[1].caption == "가" * rag.CAPTION_CHARS
+
+
+def test_number_images_empty_when_no_images():
+    c = cand("a")
+    c.images = []
+    assert rag.number_images([c]) == ({}, [[]])
+
+
+def test_build_prompt_lists_images_under_their_document_and_returns_map():
+    a = with_images("a", [{"path": "p/a1.png", "caption": "첫 화면", "alt": "", "missing": False}])
+    b = with_images("b", [
+        {"path": "p/b0.png", "caption": "빠진 그림", "alt": "", "missing": True},
+        {"path": "p/b1.png", "caption": "두 번째", "alt": "", "missing": False},
+    ])
+
+    prompt, image_map = rag.build_prompt("q", [a, b])
+
+    assert "[그림 1] 첫 화면" in prompt
+    assert "[그림 2] 두 번째" in prompt
+    assert "빠진 그림" not in prompt
+    # 그림 줄은 자기 문서 블록 안(다음 문서 머리말 앞)에 있어야 한다.
+    assert prompt.index("[그림 1]") < prompt.index("[문서 2]")
+    assert image_map == {1: rag.ImageRef("p/a1.png", "첫 화면"), 2: rag.ImageRef("p/b1.png", "두 번째")}
+
+
+# ---------------------------------------------------------------- 의도별 시스템 프롬프트
+
+def test_system_prompt_by_intent():
+    assert rag.system_prompt("console") is rag.CONSOLE_SYSTEM_PROMPT
+    assert rag.system_prompt("general") is rag.SYSTEM_PROMPT
+    assert rag.system_prompt("뭔가 이상한 값") is rag.SYSTEM_PROMPT
+
+
+def test_console_prompt_spells_out_format_rules():
+    p = rag.CONSOLE_SYSTEM_PROMPT
+    assert "메뉴 경로: 문서에 명시되지 않음" in p
+    assert "{{img:N}}" in p
+    assert "주의" in p
+    # 공통 근거 제한 문구는 두 프롬프트에 모두 있어야 한다.
+    assert "제공된 문서에서 확인되지 않습니다" in p
+    assert "제공된 문서에서 확인되지 않습니다" in rag.SYSTEM_PROMPT
+
+
+def test_answer_stream_returns_stream_and_map(monkeypatch):
+    seen = {}
+
+    def fake_stream(prompt, system=None, **kw):
+        seen["system"] = system
+        seen["prompt"] = prompt
+        yield "답"
+
+    monkeypatch.setattr(rag, "chat_stream", fake_stream)
+    a = with_images("a", [{"path": "p/a1.png", "caption": "c", "alt": "", "missing": False}])
+
+    stream, image_map = rag.answer_stream("q", [a], intent="console")
+
+    assert "".join(stream) == "답"
+    assert seen["system"] is rag.CONSOLE_SYSTEM_PROMPT
+    assert "[그림 1] c" in seen["prompt"]
+    assert image_map == {1: rag.ImageRef("p/a1.png", "c")}
+
+
+def test_string_compat_paths_are_gone():
+    for name in ("rerank", "_candidate", "_as_candidate", "get_meta", "doc_meta"):
+        assert not hasattr(rag, name), name

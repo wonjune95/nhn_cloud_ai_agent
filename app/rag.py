@@ -14,9 +14,6 @@ bm25_corpus = []
 # 4.2% 존재하므로(중복 그룹 1,051개), 본문을 키로 쓰면 마지막 문서가 출처를 가로챈다.
 bm25_meta: list["Candidate"] = []
 EMBED_DIM = 0
-# 청크 본문 -> (source, "카테고리/서비스", doc_type, section_path). UI 의 render_sources 와
-# 문자열 호환 경로에서 쓴다. 본문이 겹치면 먼저 들어온 문서를 출처로 삼는다.
-doc_meta = {}
 TOP_K = 5
 
 # 리랭킹 프롬프트에 넣을 문서당 최대 글자 수. RERANK_KEEP(12)건이면 약 11,000자.
@@ -48,6 +45,36 @@ class Candidate:
     images: list = field(default_factory=list)
 
 
+# 답변에 인라인으로 붙일 스크린샷 한 장. path 는 DOCS_DIR 기준 상대 경로.
+@dataclass(frozen=True)
+class ImageRef:
+    path: str
+    caption: str
+
+
+CAPTION_CHARS = 60
+
+
+def number_images(cands: list[Candidate]) -> tuple[dict[int, ImageRef], list[list[int]]]:
+    """후보 순서대로 missing 아닌 이미지에 1부터 순번을 매긴다.
+
+    반환: (순번 → ImageRef, 후보별 순번 목록). 프롬프트의 '[그림 N]' 과 답변의 '{{img:N}}' 이
+    같은 N 을 쓰도록, 순번표는 프롬프트와 함께 세션에 저장한다 (스펙 3-1).
+    """
+    image_map: dict[int, ImageRef] = {}
+    per_cand: list[list[int]] = []
+    for c in cands:
+        nums: list[int] = []
+        for img in c.images or []:
+            if img.get("missing"):
+                continue
+            n = len(image_map) + 1
+            image_map[n] = ImageRef(path=img["path"], caption=(img.get("caption") or "")[:CAPTION_CHARS])
+            nums.append(n)
+        per_cand.append(nums)
+    return image_map, per_cand
+
+
 def _meta_candidate(row, score: float = 0.0) -> Candidate:
     """META_COLUMNS 순서인 행의 앞 8칸으로 Candidate 를 만든다."""
     content, source, service, category, doc_type, section_path, source_url, images = row[:8]
@@ -73,16 +100,12 @@ def build_bm25():
     cur.execute(f"SELECT {META_COLUMNS} FROM documents")
     rows = cur.fetchall()
 
-    doc_meta.clear()
     bm25_corpus = []
     bm25_meta = []
     for row in rows:
         cand = _meta_candidate(row)
         bm25_corpus.append(cand.content)
         bm25_meta.append(cand)
-        doc_meta.setdefault(
-            cand.content, (cand.source_path, cand.service, cand.doc_type, cand.section_path)
-        )
 
     bm25 = BM25Okapi([tokenize(doc) for doc in bm25_corpus])
     ALIASES = load_aliases()
@@ -91,23 +114,6 @@ def build_bm25():
     conn.close()
 
     return len(bm25_corpus)
-
-
-def get_meta(content):
-    """청크 본문으로 (source_path, '카테고리/서비스') 를 되찾는다."""
-    meta = doc_meta.get(content)
-    return (meta[0], meta[1]) if meta else ("(출처 미상)", "unknown")
-
-
-def _candidate(content) -> Candidate:
-    """문자열만 있는 호환 경로용. doc_meta 에서 메타를 되찾는다."""
-    source, service, doc_type, section_path = doc_meta.get(
-        content, ("(출처 미상)", "unknown", "other", "")
-    )
-    return Candidate(
-        content=content, source_path=source, service=service,
-        doc_type=doc_type, score=0.0, section_path=section_path,
-    )
 
 
 def embed_query(text):
@@ -164,9 +170,6 @@ def hybrid_search(query, intent="general", service=None, top_k=CANDIDATES, keep=
     vector_hits = []
     for row in cur.fetchall():
         cand = _meta_candidate(row)
-        doc_meta.setdefault(
-            cand.content, (cand.source_path, cand.service, cand.doc_type, cand.section_path)
-        )
         vector_hits.append((cand, float(row[-1])))
 
     cur.close()
@@ -257,21 +260,32 @@ def rerank_candidates(query, candidates: list[Candidate], top_k=TOP_K):
     return [candidates[i] for i in order], any(grounded[i] for i in order)
 
 
-def rerank(query, docs, top_k=TOP_K):
-    """문자열 목록을 받는 호환 래퍼 (ui.py). 메타는 doc_meta 에서 되찾는다."""
-    top, grounded = rerank_candidates(query, [_candidate(d) for d in docs], top_k=top_k)
-    return [c.content for c in top], grounded
-
-SYSTEM_PROMPT = (
+_SYSTEM_COMMON = (
     "너는 NHN Cloud 공식 문서를 근거로 답하는 기술 지원 어시스턴트다. "
     "반드시 제공된 문서 내용만 근거로 삼고, 문서에 없는 내용은 지어내지 말고 "
     "'제공된 문서에서 확인되지 않습니다'라고 밝혀라. "
     "이전 대화가 주어지면 '그것', '거기' 같은 지시어가 무엇을 가리키는지 그 맥락으로 해석해 이어서 답해라. "
     "단, 이전 대화 내용 자체를 근거로 삼지 말고 근거는 언제나 제공된 문서에서만 찾아라. "
     "각 문서 본문의 첫 줄 '문서명 > 섹션 경로'는 문서 안 위치이지 콘솔 메뉴 경로가 아니다. "
-    "콘솔 메뉴 경로는 본문에 명시된 것만 써라. "
-    "답변은 한국어로 하고, 절차는 번호 목록으로, 파라미터·필드는 표로 정리해라."
+    "콘솔 메뉴 경로는 본문에 명시된 것만 써라. 답변은 한국어로 해라. "
 )
+
+SYSTEM_PROMPT = _SYSTEM_COMMON + "절차는 번호 목록으로, 파라미터·필드는 표로 정리해라."
+
+# 콘솔 절차 질문의 답변 형식 (스펙 3-2). 그림 번호는 프롬프트의 '[그림 N]' 과 같은 N 이다.
+CONSOLE_SYSTEM_PROMPT = _SYSTEM_COMMON + (
+    "답변 형식: "
+    "첫 줄에는 문서 본문에 명시된 콘솔 메뉴 경로만 '콘솔 > Network > VPC > Subnet' 형태로 써라. "
+    "문서에 메뉴 경로가 없으면 첫 줄에 '메뉴 경로: 문서에 명시되지 않음'이라고 써라. "
+    "그다음 절차를 번호 목록으로 써라. 문서 블록에 '[그림 N]'으로 표시된 스크린샷이 어느 단계에 해당하면 "
+    "그 단계 문장 끝에 {{img:N}} 를 붙여라 (예: '3. 서브넷 생성을 클릭합니다. {{img:2}}'). "
+    "문서 블록에 없는 그림 번호는 절대 쓰지 마라. "
+    "문서에 '주의' 또는 '참고' 내용이 있을 때만 마지막에 '주의' 항목을 쓰고, 없으면 쓰지 마라."
+)
+
+
+def system_prompt(intent: str) -> str:
+    return CONSOLE_SYSTEM_PROMPT if intent == "console" else SYSTEM_PROMPT
 
 # 프롬프트에 넣을 이전 대화 범위. 답변은 길어서 앞부분만 넣는다.
 HISTORY_TURNS = 3
@@ -321,43 +335,42 @@ def format_history(history):
     return "이전 대화:\n" + "\n\n".join(lines) + "\n\n"
 
 
-def _as_candidate(doc) -> Candidate:
-    return doc if isinstance(doc, Candidate) else _candidate(doc)
-
-
-def build_prompt(question, docs, history=None):
-    """docs 는 Candidate 목록(정상 경로) 또는 문자열 목록(호환 경로) 이다.
-
-    블록 머리말에 서비스·문서명·섹션·출처를 나란히 적어, 본문 첫 줄의
-    '문서명 > 섹션 경로' 가 콘솔 메뉴 경로로 오해되지 않게 한다.
+def build_prompt(question, cands: list[Candidate], history=None, intent="general"):
+    """(프롬프트, 그림 순번표). 블록 머리말에 서비스·문서명·섹션·출처를 나란히 적어
+    본문 첫 줄의 '문서명 > 섹션 경로' 가 콘솔 메뉴 경로로 오해되지 않게 하고,
+    블록 끝에 그 청크의 스크린샷을 '[그림 N] 캡션' 으로 붙인다 (스펙 3-1).
     """
+    image_map, per_cand = number_images(cands)
     blocks = []
-    for i, doc in enumerate(docs, 1):
-        c = _as_candidate(doc)
+    for i, (c, nums) in enumerate(zip(cands, per_cand), 1):
         doc_title = os.path.splitext(os.path.basename(c.source_path))[0]
-        blocks.append(
+        block = (
             f"[문서 {i}] 서비스: {c.service} · 문서: {doc_title} · "
-            f"섹션: {c.section_path} · 출처: {c.source_path}\n{c.content}"
+            f"섹션: {c.section_path} · 출처: {c.source_url or c.source_path}\n{c.content}"
         )
+        for n in nums:
+            block += f"\n[그림 {n}] {image_map[n].caption}"
+        blocks.append(block)
 
     context = "\n\n".join(blocks)
-
-    return f"""{format_history(history)}아래 문서를 근거로 질문에 답해라.
+    prompt = f"""{format_history(history)}아래 문서를 근거로 질문에 답해라.
 
 {context}
 
 질문:
 {question}
 """
+    return prompt, image_map
 
 
 def ask(question, history=None):
-    # search_docs 는 Candidate 목록을 돌려주고, build_prompt 가 그대로 받는다.
-    docs, _ = search_docs(retrieval_query(question, history), service=None)  # 필요하면 "Compute"
+    q = retrieval_query(question, history)
+    docs, _ = search_docs(q, service=None)
+    prompt, _ = build_prompt(question, docs, history, intent=detect_intent(question))
+    return chat(prompt, system=system_prompt(detect_intent(question)), max_tokens=2048)
 
-    return chat(build_prompt(question, docs, history), system=SYSTEM_PROMPT, max_tokens=2048)
 
-
-def answer_stream(question, docs, history=None):
-    """UI 에서 단계별 진행 표시를 하기 위해 검색 결과를 받아 답변만 스트리밍한다."""
-    return chat_stream(build_prompt(question, docs, history), system=SYSTEM_PROMPT, max_tokens=2048)
+def answer_stream(question, cands: list[Candidate], history=None, intent="general"):
+    """(토큰 스트림, 그림 순번표). UI 가 스트리밍 뒤 순번표로 마커를 스크린샷으로 바꾼다."""
+    prompt, image_map = build_prompt(question, cands, history, intent=intent)
+    return chat_stream(prompt, system=system_prompt(intent), max_tokens=2048), image_map
