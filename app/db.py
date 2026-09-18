@@ -173,12 +173,20 @@ QUESTION_COLUMNS = (
 
 
 def migrate(conn) -> None:
-    """questions·documents 에 2B 컬럼을 멱등하게 추가한다. 테이블이 없으면 아무것도 하지 않는다."""
+    """questions·documents 에 2B 컬럼을 멱등하게 추가한다. 테이블이 없으면 아무것도 하지 않는다.
+
+    ALTER TABLE ... ADD COLUMN IF NOT EXISTS 는 컬럼이 이미 있어도 ACCESS EXCLUSIVE
+    잠금을 잡는다. 매 UI 재기동마다 이 잠금을 잡으면 그 테이블에 열려 있는 다른
+    트랜잭션(예: idle in transaction 상태의 조회)과 맞물려 멈출 수 있으므로,
+    컬럼이 실제로 없을 때만 ALTER 를 실행한다 (IF NOT EXISTS 는 이중 방어로 남겨 둔다).
+    """
     cur = conn.cursor()
     if _table_exists(cur, "questions"):
         for col, typ in QUESTION_COLUMNS:
-            cur.execute(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {col} {typ}")
+            if not _has_column(cur, "questions", col):
+                cur.execute(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {col} {typ}")
     if _table_exists(cur, "documents"):
-        cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ DEFAULT now()")
+        if not _has_column(cur, "documents", "ingested_at"):
+            cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ DEFAULT now()")
     conn.commit()
     cur.close()
