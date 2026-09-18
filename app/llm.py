@@ -17,13 +17,16 @@ MAX_RETRIES = 5
 BACKOFF_BASE = 2.0
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
-_api_key = os.getenv("NVIDIA_API_KEY")
-if not _api_key:
-    raise RuntimeError(
-        "NVIDIA_API_KEY 가 설정되지 않았습니다. 프로젝트 루트의 .env 를 확인하세요."
-    )
+# 키가 없어도 import 는 되게 한다 (테스트·문서 도구가 이 모듈을 그냥 읽어 들인다).
+# 실제 호출 직전에 _require_key() 로 확인한다.
+client = OpenAI(base_url=BASE_URL, api_key=os.getenv("NVIDIA_API_KEY") or "missing", timeout=120.0)
 
-client = OpenAI(base_url=BASE_URL, api_key=_api_key, timeout=120.0)
+
+def _require_key() -> None:
+    if not os.getenv("NVIDIA_API_KEY"):
+        raise RuntimeError(
+            "NVIDIA_API_KEY 가 설정되지 않았습니다. 프로젝트 루트의 .env 를 확인하세요."
+        )
 
 
 def _retry(fn, **kwargs):
@@ -50,6 +53,7 @@ def _retry(fn, **kwargs):
 
 def chat(prompt, system="You are a helpful assistant.", temperature=0.5, max_tokens=1024, think=True):
     """think=False 면 Nemotron 의 추론 토큰을 끈다. 리랭킹처럼 짧은 구조화 출력은 추론 없이도 정확하고 30배 빠르다(실측 34초→1.3초)."""
+    _require_key()
     res = _retry(
         client.chat.completions.create,
         model=LLM_MODEL_NAME,
@@ -75,6 +79,7 @@ def chat_stream(prompt, system="You are a helpful assistant.", temperature=0.5, 
     이 오류는 요청 생성이 아니라 스트림을 읽는 도중에 나므로 _retry 가 잡지 못한다.
     아직 한 토큰도 내보내지 않았다면 처음부터 다시 요청한다.
     """
+    _require_key()
     last_err = None
 
     for attempt in range(MAX_RETRIES):
@@ -121,6 +126,7 @@ def embed(texts, input_type="passage"):
     input_type 은 NIM 임베딩 전용 파라미터라 extra_body 로 넘긴다.
     적재 문서는 "passage", 검색 질의는 "query" 를 쓴다.
     """
+    _require_key()
     res = _retry(
         client.embeddings.create,
         model=EMBEDDING_MODEL_NAME,
