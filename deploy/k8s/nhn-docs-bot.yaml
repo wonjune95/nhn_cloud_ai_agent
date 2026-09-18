@@ -6,6 +6,11 @@
 #       --from-literal=POSTGRES_USER=devops \
 #       --from-literal=POSTGRES_PASSWORD='<강한 비밀번호>'
 #   kubectl -n nhn-docs-bot create secret docker-registry regcred ...   (또는 기존 풀 시크릿 복사)
+#   kubectl -n nhn-docs-bot create secret generic admin \
+#       --from-literal=ADMIN_TOKEN="$(openssl rand -base64 24)"
+#   (관리자 페이지 토큰. 조회: kubectl -n nhn-docs-bot get secret admin \
+#    -o jsonpath='{.data.ADMIN_TOKEN}' | base64 -d — optional 이라 시크릿이 없어도 앱은 뜬다,
+#    다만 그때는 관리자 페이지가 보호되지 않는다.)
 #
 # 시크릿 db 는 pgvector(POSTGRES_USER/POSTGRES_PASSWORD)와 앱(DB_USER/DB_PASSWORD)이
 # 같은 값을 공유한다. 비밀번호를 바꾸면 pgvector 는 이미 초기화된 PGDATA 의 계정을
@@ -169,6 +174,9 @@ spec:
             - name: NVIDIA_API_KEY
               valueFrom:
                 secretKeyRef: { name: llm, key: NVIDIA_API_KEY }
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: { name: admin, key: ADMIN_TOKEN, optional: true }
           ports:
             - containerPort: 8501
           readinessProbe:

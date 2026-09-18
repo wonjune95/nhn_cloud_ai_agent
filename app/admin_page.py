@@ -1,7 +1,8 @@
-"""관리자 페이지 (스펙 4-3). questions 집계만 보여 준다. 인증은 없다 — 인증을 붙일 때 이 페이지부터 막는다."""
+"""관리자 페이지 (스펙 4-3). questions 집계만 보여 준다. ADMIN_TOKEN 으로 보호한다(admin_auth)."""
 import pandas as pd
 import streamlit as st
 
+import admin_auth
 import admin_stats as s
 import schema_ready
 from db import get_conn
@@ -18,6 +19,8 @@ def page():
         '<div class="nhn-subtitle">질문 로그·피드백 집계</div></div></div>',
         unsafe_allow_html=True,
     )
+    if not admin_auth.gate():
+        return
     period = st.radio("기간", s.PERIODS, horizontal=True, index=1)
     since = s.since_for(period)
 

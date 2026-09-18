@@ -295,3 +295,62 @@ def test_admin_page_shows_banner_when_schema_not_migrated(monkeypatch):
     assert not at.exception
     assert any("DB 에서 지표를 읽지 못했습니다" in e.value for e in at.error)
     assert any("UndefinedColumn" in c.value for c in at.caption)
+
+
+def _fake_admin_stats(monkeypatch):
+    """토큰 게이트 테스트에서는 통과 후 화면이 정상 렌더되는지만 보면 되므로 최소한만 가짜로 만든다."""
+    import admin_stats as s
+    import admin_page
+    import schema_ready
+
+    monkeypatch.setattr(schema_ready, "ensure_schema", lambda: None)
+    monkeypatch.setattr(admin_page, "get_conn", lambda: types.SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(s, "summary", lambda conn, since: {
+        "questions": 12, "sessions": 4, "median_s": 9.5, "max_s": 31.0,
+        "error_rate": 0.25, "ungrounded_rate": 0.5, "up": 3, "down": 2})
+    monkeypatch.setattr(s, "by_service", lambda conn, since: [("Network/VPC", 5, 2, 1)])
+    monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [])
+    monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
+    monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
+    monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 100, "services": 7, "last_ingested_at": None})
+
+
+def test_admin_page_open_when_admin_token_is_empty(monkeypatch):
+    """ADMIN_TOKEN 이 비어 있으면(로컬 개발) 게이트 없이 바로 지표가 보인다."""
+    import admin_auth
+
+    _fake_admin_stats(monkeypatch)
+    monkeypatch.setattr(admin_auth, "required_token", lambda: "")
+
+    at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert any(m.value == "12" for m in at.metric)
+
+
+def test_admin_page_requires_token_when_admin_token_is_set(monkeypatch):
+    """ADMIN_TOKEN 이 설정돼 있으면 토큰 입력창이 뜨고, 맞는 토큰을 넣어야만 지표가 보인다."""
+    import admin_auth
+
+    _fake_admin_stats(monkeypatch)
+    monkeypatch.setattr(admin_auth, "required_token", lambda: "s3cret")
+
+    at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert at.text_input
+    assert not at.metric
+
+    # 틀린 토큰: 오류만 뜨고 여전히 지표는 없다.
+    at.text_input[0].input("wrong").run()
+    at.button[0].click().run()
+    assert not at.exception
+    assert any("토큰이 올바르지 않습니다" in e.value for e in at.error)
+    assert not at.metric
+
+    # 맞는 토큰: 세션에 저장되고 rerun 후 지표가 보인다.
+    at.text_input[0].input("s3cret").run()
+    at.button[0].click().run()
+    assert not at.exception
+    at.run()
+    assert any(m.value == "12" for m in at.metric)

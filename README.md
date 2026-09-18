@@ -160,8 +160,13 @@ pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragd
 ## UI
 
 `app/ui.py` 는 `st.navigation` 으로 두 페이지를 띄운다: 챗(`/`, `app/chat_page.py`)과
-관리자(`/admin`, `app/admin_page.py`). 관리자 페이지는 별도 인증이 없다 — 링크를 아는
-사람은 누구나 지표를 볼 수 있다.
+관리자(`/admin`, `app/admin_page.py`). 관리자 페이지는 `ADMIN_TOKEN`(k8s Secret `admin`)을
+요구한다; 비어 있으면 보호하지 않는다(로컬 개발). 토큰 생성/조회:
+
+```
+kubectl -n nhn-docs-bot create secret generic admin --from-literal=ADMIN_TOKEN="$(openssl rand -base64 24)"
+kubectl -n nhn-docs-bot get secret admin -o jsonpath='{.data.ADMIN_TOKEN}' | base64 -d
+```
 
 | 구분 | 내용 |
 | --- | --- |
@@ -214,9 +219,10 @@ UI pod 안(NVIDIA NIM 무료 티어, 리랭킹은 추론 끔)에서 측정한 �
   있으면 쿠버네티스가 `DB_PORT=tcp://…` 환경변수를 자동 주입해 앱이 쓰는 `DB_PORT`
   와 충돌하기 때문이다.
 - 공개 접속: `https://nhn-docs-bot.180-210-89-135.nip.io` (`deploy/k8s/httproute.yaml`, Traefik
-  Gateway 를 통한 HTTPRoute). 인증은 없다 — 링크를 아는 사람은 누구나 챗·관리자 페이지에
-  접속할 수 있다. 인증을 붙이는 방법(Traefik `basicAuth` Middleware)은 `httproute.yaml`
-  주석에 있다.
+  Gateway 를 통한 HTTPRoute). 챗은 인증 없이 열려 있다 — 링크를 아는 사람은 누구나 쓸 수
+  있다. 관리자 페이지(`/admin`)만 `ADMIN_TOKEN`(k8s Secret `admin`)으로 막혀 있다(비어
+  있으면 로컬 개발처럼 무보호로 동작한다). 사이트 전체를 막는 방법(Traefik `basicAuth`
+  Middleware)은 여전히 미래 옵션으로 `httproute.yaml` 주석에 남겨 뒀다.
 - 이미지는 두 개다: 앱 `nhn-docs-bot`(`app/Dockerfile`, 비root uid 1000 — UI·ingest·refresh
   CronJob 의 ingest 단계가 공용)와 크롤러 `nhn-docs-crawler`(`crawlling/Dockerfile`, 빌드
   컨텍스트는 저장소 루트). 태그는 이번 단계에서 `2b2-<git 짧은 해시>` 형식을 쓴다
@@ -236,6 +242,7 @@ kubectl -n nhn-docs-bot create secret generic db \
     --from-literal=POSTGRES_USER=devops \
     --from-literal=POSTGRES_PASSWORD='<강한 비밀번호>'
 kubectl -n nhn-docs-bot create secret generic llm --from-literal=NVIDIA_API_KEY=...
+kubectl -n nhn-docs-bot create secret generic admin --from-literal=ADMIN_TOKEN="$(openssl rand -base64 24)"
 kubectl -n nhn-docs-bot create secret docker-registry regcred \
     --docker-server=harbor.114-110-181-178.nip.io --docker-username=... --docker-password=...
 ```
