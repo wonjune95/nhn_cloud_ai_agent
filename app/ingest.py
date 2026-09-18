@@ -82,7 +82,8 @@ def prune_missing(conn, seen_paths: list[str]) -> int:
     cur = conn.cursor()
     try:
         cur.execute("SELECT DISTINCT source_path FROM documents")
-        stale = [row[0] for row in cur.fetchall() if row[0] not in set(seen_paths)]
+        seen = set(seen_paths)
+        stale = [row[0] for row in cur.fetchall() if row[0] not in seen]
         if stale:
             cur.execute("DELETE FROM documents WHERE source_path = ANY(%s)", (stale,))
         conn.commit()
@@ -118,7 +119,8 @@ def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None, has_bre
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (chunk.content, vector, category, service, doc_type_of(doc_title), doc_title,
                      chunk.section_path, rel_path, url, digest,
-                     Json([{"path": i.path, "caption": i.caption, "alt": i.alt} for i in chunk.images])),
+                     Json([{"path": i.path, "caption": i.caption, "alt": i.alt, "missing": i.missing}
+                           for i in chunk.images])),
                 )
 
         conn.commit()   # 문서 단위 커밋: 중간에 끊겨도 앞 문서는 남는다

@@ -88,7 +88,8 @@ def test_rebuild_then_skip_then_reingest_on_change(docs_dir, conn):
     assert got[0][:4] == ("Network", "VPC", "console", "콘솔 사용 가이드")
     assert got[0][4] == "서브넷 생성"
     assert got[0][5] == "https://docs.nhncloud.com/ko/x/"
-    assert got[0][6] == [{"path": "Network/VPC/images/s1.png", "caption": "서브넷 생성 버튼을 클릭합니다.", "alt": ""}]
+    assert got[0][6] == [{"path": "Network/VPC/images/s1.png", "caption": "서브넷 생성 버튼을 클릭합니다.",
+                          "alt": "", "missing": False}]
     assert got[1][6] == []
 
     # 같은 내용이면 건너뛴다 (행 수 그대로)

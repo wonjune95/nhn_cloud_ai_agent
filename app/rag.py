@@ -1,5 +1,6 @@
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 from db import get_conn, embedding_dim, vector_order_by
 from intent import detect_intent, detect_service, load_aliases
@@ -9,12 +10,16 @@ from tokenize_ko import tokenize
 
 bm25 = None
 bm25_corpus = []
+# bm25_corpus 와 인덱스가 나란히 맞는 청크 메타. 본문이 같은 청크가 서로 다른 문서에
+# 4.2% 존재하므로(중복 그룹 1,051개), 본문을 키로 쓰면 마지막 문서가 출처를 가로챈다.
+bm25_meta: list["Candidate"] = []
 EMBED_DIM = 0
-# 청크 본문 -> (source, "카테고리/서비스", doc_type). 검색 결과에 출처를 붙이기 위해 들고 있는다.
+# 청크 본문 -> (source, "카테고리/서비스", doc_type, section_path). UI 의 render_sources 와
+# 문자열 호환 경로에서 쓴다. 본문이 겹치면 먼저 들어온 문서를 출처로 삼는다.
 doc_meta = {}
 TOP_K = 5
 
-# 리랭킹 프롬프트에 넣을 문서당 최대 글자 수. 후보 20건이면 약 14,000자.
+# 리랭킹 프롬프트에 넣을 문서당 최대 글자 수. RERANK_KEEP(12)건이면 약 11,000자.
 RERANK_DOC_CHARS = 900
 
 CANDIDATES = 20     # 벡터·BM25 각각 가져올 개수
@@ -26,6 +31,10 @@ BOOST_SERVICE = 1.3
 ALIASES: dict[str, str] = {}
 
 
+# 답변 단계까지 들고 갈 청크 메타 컬럼 (스펙 4-4).
+META_COLUMNS = "content, source_path, service, category, doc_type, section_path, source_url, images"
+
+
 @dataclass
 class Candidate:
     content: str
@@ -33,21 +42,47 @@ class Candidate:
     service: str       # "카테고리/서비스"
     doc_type: str
     score: float
+    section_path: str = ""
+    source_url: str | None = None
+    # JSONB 에 저장된 모양 그대로: {path, caption, alt, missing}
+    images: list = field(default_factory=list)
+
+
+def _meta_candidate(row, score: float = 0.0) -> Candidate:
+    """META_COLUMNS 순서인 행의 앞 8칸으로 Candidate 를 만든다."""
+    content, source, service, category, doc_type, section_path, source_url, images = row[:8]
+    return Candidate(
+        content=content,
+        source_path=source,
+        service=f"{category}/{service}",
+        doc_type=doc_type,
+        score=score,
+        section_path=section_path or "",
+        source_url=source_url,
+        images=list(images or []),
+    )
 
 
 def build_bm25():
-    global bm25, bm25_corpus, EMBED_DIM, ALIASES
+    global bm25, bm25_corpus, bm25_meta, EMBED_DIM, ALIASES
 
     conn = get_conn()
     EMBED_DIM = embedding_dim(conn) or 0
     cur = conn.cursor()
 
-    cur.execute("SELECT content, source_path, service, category, doc_type FROM documents")
+    cur.execute(f"SELECT {META_COLUMNS} FROM documents")
     rows = cur.fetchall()
 
-    bm25_corpus = [r[0] for r in rows]
-    for content, source, service, category, doc_type in rows:
-        doc_meta[content] = (source, f"{category}/{service}", doc_type)
+    doc_meta.clear()
+    bm25_corpus = []
+    bm25_meta = []
+    for row in rows:
+        cand = _meta_candidate(row)
+        bm25_corpus.append(cand.content)
+        bm25_meta.append(cand)
+        doc_meta.setdefault(
+            cand.content, (cand.source_path, cand.service, cand.doc_type, cand.section_path)
+        )
 
     bm25 = BM25Okapi([tokenize(doc) for doc in bm25_corpus])
     ALIASES = load_aliases()
@@ -65,8 +100,14 @@ def get_meta(content):
 
 
 def _candidate(content) -> Candidate:
-    source, service, doc_type = doc_meta.get(content, ("(출처 미상)", "unknown", "other"))
-    return Candidate(content=content, source_path=source, service=service, doc_type=doc_type, score=0.0)
+    """문자열만 있는 호환 경로용. doc_meta 에서 메타를 되찾는다."""
+    source, service, doc_type, section_path = doc_meta.get(
+        content, ("(출처 미상)", "unknown", "other", "")
+    )
+    return Candidate(
+        content=content, source_path=source, service=service,
+        doc_type=doc_type, score=0.0, section_path=section_path,
+    )
 
 
 def embed_query(text):
@@ -77,10 +118,11 @@ def to_pgvector(vec):
     return "[" + ",".join(map(str, vec)) + "]"
 
 def search_docs(query, service=None):
+    """(상위 Candidate 목록, grounded). 청크 메타를 그대로 답변 단계로 넘긴다."""
     intent = detect_intent(query)
     svc = service or detect_service(query, ALIASES)
     candidates = hybrid_search(query, intent=intent, service=svc)
-    return rerank(query, [c.content for c in candidates], top_k=TOP_K)
+    return rerank_candidates(query, candidates, top_k=TOP_K)
 
 
 def combine_scores(vector_hits, bm25_hits, intent, service, keep=RERANK_KEEP):
@@ -100,7 +142,7 @@ def combine_scores(vector_hits, bm25_hits, intent, service, keep=RERANK_KEEP):
             score *= BOOST_CONSOLE
         if service and cand.service == service:
             score *= BOOST_SERVICE
-        merged.append(Candidate(cand.content, cand.source_path, cand.service, cand.doc_type, score))
+        merged.append(replace(cand, score=score))
 
     merged.sort(key=lambda c: c.score, reverse=True)
     return merged[:keep]
@@ -112,7 +154,7 @@ def hybrid_search(query, intent="general", service=None, top_k=CANDIDATES, keep=
 
     q_vec = to_pgvector(embed_query(query))
     cur.execute(f"""
-    SELECT content, source_path, service, category, doc_type,
+    SELECT {META_COLUMNS},
            1 - ({vector_order_by(EMBED_DIM)}) AS similarity
       FROM documents
      ORDER BY {vector_order_by(EMBED_DIM)}
@@ -120,77 +162,105 @@ def hybrid_search(query, intent="general", service=None, top_k=CANDIDATES, keep=
     """, (q_vec, q_vec, top_k))
 
     vector_hits = []
-    for content, source, svc, category, doc_type, sim in cur.fetchall():
-        doc_meta.setdefault(content, (source, f"{category}/{svc}", doc_type))
-        vector_hits.append((_candidate(content), float(sim)))
+    for row in cur.fetchall():
+        cand = _meta_candidate(row)
+        doc_meta.setdefault(
+            cand.content, (cand.source_path, cand.service, cand.doc_type, cand.section_path)
+        )
+        vector_hits.append((cand, float(row[-1])))
 
     cur.close()
     conn.close()
 
     scores = bm25.get_scores(tokenize(query))
     top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-    bm25_hits = [(_candidate(bm25_corpus[i]), float(scores[i])) for i in top_idx if scores[i] > 0]
+    # 본문이 아니라 인덱스로 메타를 찾는다 — 본문이 같은 청크가 여러 문서에 있어서다.
+    bm25_hits = [(bm25_meta[i], float(scores[i])) for i in top_idx if scores[i] > 0]
 
     return combine_scores(vector_hits, bm25_hits, intent, service, keep)
 
 _ARRAY = re.compile(r"\[[\d\s.,]*\]")
+# 라벨(점수/근거) 바로 뒤의 배열. JSON 형태('"점수": [...]')도 함께 잡는다.
+_SCORE_LABEL = re.compile(r"점수[\"']?\s*:\s*(\[[\d\s.,]*\])")
+_GROUNDED_LABEL = re.compile(r"근거[\"']?\s*:\s*(\[[\d\s.,]*\])")
 
 
 def _numbers(array_text: str) -> list[float]:
     return [float(v) for v in re.findall(r"\d+(?:\.\d+)?", array_text)]
 
 
-def parse_rerank(text: str, n: int):
-    """응답의 마지막 두 숫자 배열을 (점수, 근거) 로 읽는다. 둘 다 길이 n 일 때만 돌려준다.
-
-    순서는 프롬프트가 고정한다: 점수 줄이 먼저, 근거 줄이 나중.
-    """
-    arrays = _ARRAY.findall(text)
-    if len(arrays) < 2:
-        return None
-
-    scores = _numbers(arrays[-2])
-    grounded_raw = _numbers(arrays[-1])
+def _pair(scores_text: str, grounded_text: str, n: int):
+    scores = _numbers(scores_text)
+    grounded_raw = _numbers(grounded_text)
     if len(scores) != n or len(grounded_raw) != n:
         return None
     return scores, [v >= 1 for v in grounded_raw]
 
 
-def rerank(query, docs, top_k=TOP_K):
+def parse_rerank(text: str, n: int):
+    """응답에서 (점수, 근거) 배열을 읽는다. 둘 다 길이 n 일 때만 돌려준다.
+
+    먼저 '점수:' / '근거:' 라벨 뒤의 배열을 찾는다 (모델이 설명이나 예시 배열을 덧붙여도
+    엉뚱한 배열을 집지 않게). 라벨이 없으면 마지막 두 배열을 점수·근거 순으로 본다.
+    """
+    scores_hits = _SCORE_LABEL.findall(text)
+    grounded_hits = _GROUNDED_LABEL.findall(text)
+    if scores_hits and grounded_hits:
+        parsed = _pair(scores_hits[-1], grounded_hits[-1], n)
+        if parsed is not None:
+            return parsed
+
+    arrays = _ARRAY.findall(text)
+    if len(arrays) < 2:
+        return None
+    return _pair(arrays[-2], arrays[-1], n)
+
+
+def rerank_candidates(query, candidates: list[Candidate], top_k=TOP_K):
     """후보 전체를 추론 끈 한 번의 호출로 채점하고, 답이 있는 문서인지도 함께 받는다.
 
-    반환: (상위 문서, grounded). grounded 는 상위 문서 중 '근거 있음' 이 하나라도 있으면 True,
-    하나도 없으면 False, 응답을 못 읽었으면 None (검색 순서를 그대로 쓴다).
+    반환: (상위 Candidate, grounded). grounded 는 상위 문서 중 '근거 있음' 이 하나라도
+    있으면 True, 하나도 없으면 False, 응답을 못 읽었으면 None (검색 순서를 그대로 쓴다).
     """
-    if not docs:
+    if not candidates:
         return [], False
 
-    listing = "\n\n".join(f"[{i}] {d[:RERANK_DOC_CHARS]}" for i, d in enumerate(docs))
+    listing = "\n\n".join(
+        f"[{i}] {c.content[:RERANK_DOC_CHARS]}" for i, c in enumerate(candidates)
+    )
     prompt = f"""질문과 각 문서의 관련도를 0~10 점으로 평가하고, 그 문서만으로 질문에 답할 수 있는지(1/0)도 표시해.
 
 질문:
 {query}
 
-문서 목록 ({len(docs)}건):
+문서 목록 ({len(candidates)}건):
 {listing}
 
 아래 두 줄만 출력해. 설명은 쓰지 마.
-점수: [점수0, 점수1, ..., 점수{len(docs) - 1}]
-근거: [답가능0, 답가능1, ..., 답가능{len(docs) - 1}]
+점수: [점수0, 점수1, ..., 점수{len(candidates) - 1}]
+근거: [답가능0, 답가능1, ..., 답가능{len(candidates) - 1}]
 """
 
     try:
-        parsed = parse_rerank(chat(prompt, temperature=0.0, max_tokens=512, think=False), len(docs))
+        parsed = parse_rerank(
+            chat(prompt, temperature=0.0, max_tokens=512, think=False), len(candidates)
+        )
     except Exception as e:
         print(f"  [리랭킹 실패] {type(e).__name__}: {e} → 검색 순서 사용")
         parsed = None
 
     if parsed is None:
-        return docs[:top_k], None
+        return candidates[:top_k], None
 
     scores, grounded = parsed
-    order = sorted(range(len(docs)), key=lambda i: scores[i], reverse=True)[:top_k]
-    return [docs[i] for i in order], any(grounded[i] for i in order)
+    order = sorted(range(len(candidates)), key=lambda i: scores[i], reverse=True)[:top_k]
+    return [candidates[i] for i in order], any(grounded[i] for i in order)
+
+
+def rerank(query, docs, top_k=TOP_K):
+    """문자열 목록을 받는 호환 래퍼 (ui.py). 메타는 doc_meta 에서 되찾는다."""
+    top, grounded = rerank_candidates(query, [_candidate(d) for d in docs], top_k=top_k)
+    return [c.content for c in top], grounded
 
 SYSTEM_PROMPT = (
     "너는 NHN Cloud 공식 문서를 근거로 답하는 기술 지원 어시스턴트다. "
@@ -198,6 +268,8 @@ SYSTEM_PROMPT = (
     "'제공된 문서에서 확인되지 않습니다'라고 밝혀라. "
     "이전 대화가 주어지면 '그것', '거기' 같은 지시어가 무엇을 가리키는지 그 맥락으로 해석해 이어서 답해라. "
     "단, 이전 대화 내용 자체를 근거로 삼지 말고 근거는 언제나 제공된 문서에서만 찾아라. "
+    "각 문서 본문의 첫 줄 '문서명 > 섹션 경로'는 문서 안 위치이지 콘솔 메뉴 경로가 아니다. "
+    "콘솔 메뉴 경로는 본문에 명시된 것만 써라. "
     "답변은 한국어로 하고, 절차는 번호 목록으로, 파라미터·필드는 표로 정리해라."
 )
 
@@ -249,11 +321,24 @@ def format_history(history):
     return "이전 대화:\n" + "\n\n".join(lines) + "\n\n"
 
 
+def _as_candidate(doc) -> Candidate:
+    return doc if isinstance(doc, Candidate) else _candidate(doc)
+
+
 def build_prompt(question, docs, history=None):
+    """docs 는 Candidate 목록(정상 경로) 또는 문자열 목록(호환 경로) 이다.
+
+    블록 머리말에 서비스·문서명·섹션·출처를 나란히 적어, 본문 첫 줄의
+    '문서명 > 섹션 경로' 가 콘솔 메뉴 경로로 오해되지 않게 한다.
+    """
     blocks = []
-    for i, d in enumerate(docs, 1):
-        source, service = get_meta(d)
-        blocks.append(f"[문서 {i}] (서비스: {service} / 출처: {source})\n{d}")
+    for i, doc in enumerate(docs, 1):
+        c = _as_candidate(doc)
+        doc_title = os.path.splitext(os.path.basename(c.source_path))[0]
+        blocks.append(
+            f"[문서 {i}] 서비스: {c.service} · 문서: {doc_title} · "
+            f"섹션: {c.section_path} · 출처: {c.source_path}\n{c.content}"
+        )
 
     context = "\n\n".join(blocks)
 
@@ -267,6 +352,7 @@ def build_prompt(question, docs, history=None):
 
 
 def ask(question, history=None):
+    # search_docs 는 Candidate 목록을 돌려주고, build_prompt 가 그대로 받는다.
     docs, _ = search_docs(retrieval_query(question, history), service=None)  # 필요하면 "Compute"
 
     return chat(build_prompt(question, docs, history), system=SYSTEM_PROMPT, max_tokens=2048)
@@ -275,24 +361,3 @@ def ask(question, history=None):
 def answer_stream(question, docs, history=None):
     """UI 에서 단계별 진행 표시를 하기 위해 검색 결과를 받아 답변만 스트리밍한다."""
     return chat_stream(build_prompt(question, docs, history), system=SYSTEM_PROMPT, max_tokens=2048)
-
-def langchain_search(query):
-    # langchain 1.x 에서 langchain.schema 가 제거돼 langchain_core 로 옮겨졌다.
-    from langchain_core.documents import Document
-
-    docs, _ = search_docs(query)
-    return [Document(page_content=d) for d in docs]
-
-def ask_langchain(question):
-    docs = langchain_search(question)
-
-    context = "\n\n".join([d.page_content for d in docs])
-
-    return chat(f"""
-문서를 기반으로만 답해.
-
-{context}
-
-질문:
-{question}
-""", max_tokens=2048)

@@ -111,7 +111,7 @@ with st.sidebar:
 
     st.markdown("### 검색 설정")
     top_k = st.slider("참고 문서 수", 3, 10, 5)
-    candidates = st.slider("검색 후보 수", 5, 20, 10,
+    candidates = st.slider("검색 후보 수", 5, 20, 20,
                            help="벡터·BM25 각각에서 가져올 개수. 늘리면 정확도가 오르지만 느려집니다.")
 
     st.divider()
