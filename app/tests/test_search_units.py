@@ -225,6 +225,35 @@ def test_build_prompt_lists_images_under_their_document_and_returns_map():
     assert image_map == {1: rag.ImageRef("p/a1.png", "첫 화면"), 2: rag.ImageRef("p/b1.png", "두 번째")}
 
 
+# ---------------------------------------------------------------- retrieval_query
+
+def test_retrieval_query_prepends_previous_question_for_short_followup():
+    history = [{"role": "user", "content": "VPC 가 뭐야"}, {"role": "assistant", "content": "가상 네트워크다"}]
+    assert rag.retrieval_query("서브넷은?", history) == "VPC 가 뭐야 서브넷은?"
+
+
+def test_retrieval_query_returns_question_unchanged_when_same_as_previous():
+    """다시 생성: 직전과 같은 질문을 다시 물으면 자기 자신을 앞에 붙이지 않는다."""
+    history = [{"role": "user", "content": "서브넷 만드는 법"}, {"role": "assistant", "content": "..."}]
+    assert rag.retrieval_query("서브넷 만드는 법", history) == "서브넷 만드는 법"
+
+
+def test_retrieval_query_returns_question_unchanged_without_history():
+    assert rag.retrieval_query("서브넷 만드는 법", []) == "서브넷 만드는 법"
+    assert rag.retrieval_query("서브넷 만드는 법", None) == "서브넷 만드는 법"
+
+
+def test_retrieval_query_regenerate_of_followup_keeps_context():
+    """후속 질문을 '다시 생성'해도(history 맨 끝에 자기 자신이 있어도) 그 앞의 원래 질문을 이어 붙인다."""
+    history = [
+        {"role": "user", "content": "VPC가 뭐야"},
+        {"role": "assistant", "content": "…"},
+        {"role": "user", "content": "그건 콘솔에서 어떻게 해?"},
+        {"role": "assistant", "content": "…"},
+    ]
+    assert rag.retrieval_query("그건 콘솔에서 어떻게 해?", history) == "VPC가 뭐야 그건 콘솔에서 어떻게 해?"
+
+
 # ---------------------------------------------------------------- 의도별 시스템 프롬프트
 
 def test_system_prompt_by_intent():
@@ -367,3 +396,8 @@ def test_answer_stream_returns_stream_and_map(monkeypatch):
 def test_string_compat_paths_are_gone():
     for name in ("rerank", "_candidate", "_as_candidate", "get_meta", "doc_meta"):
         assert not hasattr(rag, name), name
+
+
+def test_both_prompts_ask_for_citations():
+    for p in (rag.SYSTEM_PROMPT, rag.CONSOLE_SYSTEM_PROMPT):
+        assert "[1] 처럼 적어라" in p and "[1][3]" in p

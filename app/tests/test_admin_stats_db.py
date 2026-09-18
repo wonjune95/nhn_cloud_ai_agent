@@ -1,11 +1,14 @@
 """관리자 집계. 실제 pgvector 필요:  DB_HOST=localhost python -m pytest -m integration app/tests/test_admin_stats_db.py"""
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
-NOW = datetime.now(timezone.utc)
+# 자정 근처(KST)에 도는 test_daily_groups_by_kst_date 가 "오늘" 행을 두 날짜로 쪼개지 않도록
+# KST 정오로 고정한다(10일 전 값도 같은 시각이라 안전).
+NOW = datetime.now(ZoneInfo("Asia/Seoul")).replace(hour=12, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
 def insert(conn, **kw):
@@ -96,3 +99,26 @@ def test_rows_rolls_back_on_error_so_connection_stays_usable(seeded):
     with pytest.raises(Exception):
         s._rows(seeded, "SELECT * FROM no_such_table", {})
     assert s.summary(seeded, None)["questions"] == 5
+
+
+def test_daily_groups_by_kst_date(seeded):
+    import admin_stats as s
+    rows = s.daily(seeded, None)
+    assert len(rows) == 2                      # 오늘 4건 + 10일 전 1건
+    today = rows[-1]
+    assert today[1] == 4 and today[3] == 1     # 질문 4, 👎 1 (오늘 것만)
+    assert isinstance(today[2], float)
+
+
+def test_search_matches_question_text(seeded):
+    import admin_stats as s
+    assert s.search(seeded, None, "") == []
+    rows = s.search(seeded, None, "q")
+    assert len(rows) == 5 and all(len(r) == 5 for r in rows)
+    assert s.search(seeded, None, "없는말") == []
+
+
+def test_recent_down_carries_full_answer_and_sources(seeded):
+    import admin_stats as s
+    row = s.recent_down(seeded, None)[0]
+    assert len(row) == 6 and len(row[3]) <= 200 and row[4].startswith("긴 답변") and row[5] == []

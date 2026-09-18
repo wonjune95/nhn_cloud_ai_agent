@@ -334,6 +334,8 @@ _SYSTEM_COMMON = (
     "단, 이전 대화 내용 자체를 근거로 삼지 말고 근거는 언제나 제공된 문서에서만 찾아라. "
     "각 문서 본문의 첫 줄 '문서명 > 섹션 경로'는 문서 안 위치이지 콘솔 메뉴 경로가 아니다. "
     "답변은 한국어로 해라. "
+    "근거로 삼은 문서의 번호를 그 문장이나 단계 끝에 [1] 처럼 적어라. "
+    "문서 블록의 [문서 N] 번호와 같은 번호를 쓰고, 여러 문서면 [1][3] 처럼 이어 적어라. "
 )
 
 SYSTEM_PROMPT = _SYSTEM_COMMON + (
@@ -372,9 +374,15 @@ FOLLOWUP_HINTS = (
 )
 
 
-def last_user_question(history):
+def last_user_question(history, skip=None):
+    """가장 최근 사용자 턴의 내용. skip 과 같은 내용의 턴은 건너뛰고 그 앞을 찾는다.
+
+    '다시 생성'은 같은 질문을 다시 물어 방금 그 질문 자신이 history 맨 끝에 남아 있는
+    경우다 — skip 으로 자기 자신을 걸러야 그 앞의(후속 질문이면 맥락이 되는) 진짜
+    직전 질문을 찾는다.
+    """
     for msg in reversed(history or []):
-        if msg["role"] == "user":
+        if msg["role"] == "user" and msg["content"] != skip:
             return msg["content"]
     return None
 
@@ -386,7 +394,7 @@ def retrieval_query(question, history=None):
     LLM 으로 질문을 다시 쓰면 호출이 한 번 늘어 요청 한도를 더 먹으므로,
     후속 질문으로 보이면 직전 질문을 앞에 붙이는 방식으로 대신한다.
     """
-    prev = last_user_question(history)
+    prev = last_user_question(history, skip=question)
     if not prev:
         return question
 

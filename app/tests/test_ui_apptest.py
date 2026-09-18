@@ -12,6 +12,13 @@ from rag import Candidate, ImageRef
 # 저장소 루트 기준의 app/ui.py 를 절대 경로로 넘겨야 한다.
 UI_PATH = str(pathlib.Path(__file__).resolve().parents[1] / "ui.py")
 
+# 1x1 투명 PNG. 여러 테스트가 스크린샷 파일로 재사용한다.
+PNG_1X1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+    b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 def fake_index(monkeypatch, calls):
     """rag 의 무거운 부분을 가짜로 바꾼다. calls 에 검색 인자와 피드백 호출을 기록한다."""
@@ -42,9 +49,22 @@ def fake_index(monkeypatch, calls):
     monkeypatch.setattr(rag, "hybrid_search", hybrid)
     monkeypatch.setattr(rag, "rerank_candidates", rerank)
     monkeypatch.setattr(rag, "answer_stream", stream)
-    monkeypatch.setattr(qlog, "log_question", lambda **kw: calls.append(("log", kw)) or 42)
+    # 42 부터 호출마다 증가 — 한 대화에서 두 번 물으면(예: 다시 생성) 서로 다른 question_id 를 받는다.
+    # (실제 DB 는 매번 새 행을 만들어 자동으로 그렇다; 여기서는 흉내만 낸다.)
+    ids = iter(range(42, 10_000))
+
+    def log_question(**kw):
+        calls.append(("log", kw))
+        return next(ids)
+
+    monkeypatch.setattr(qlog, "log_question", log_question)
     monkeypatch.setattr(qlog, "set_feedback", lambda qid, v: calls.append(("feedback", qid, v)) or True)
     chat_page.load_index.clear()
+
+
+def _messages(at):
+    """현재 대화의 messages. 대화 목록(Task 5) 뒤로 messages 는 session_state 최상위가 아니다."""
+    return [c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"]][0]["messages"]
 
 
 @pytest.fixture
@@ -104,12 +124,7 @@ def test_markers_become_images(app, monkeypatch, tmp_path):
 
     png = tmp_path / "Network" / "VPC" / "images"
     png.mkdir(parents=True)
-    # 1x1 투명 PNG.
-    (png / "a.png").write_bytes(
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
-        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
-        b"\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    (png / "a.png").write_bytes(PNG_1X1)
     monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
 
     at, _calls = app
@@ -238,16 +253,16 @@ def test_feedback_buttons_show_caption_when_question_id_is_none(app, monkeypatch
 
 
 def test_reset_clears_feedback_state(app):
-    """'대화 초기화' 는 fb_* 상태까지 지운다 (순번 재사용으로 남의 평가를 물려받지 않게)."""
+    """'현재 대화 지우기' 는 fb_* 상태까지 지운다 (순번 재사용으로 남의 평가를 물려받지 않게)."""
     at, calls = app
     at.run()
     at.chat_input[0].set_value("서브넷 만드는 법").run()
     next(b for b in at.button if b.label == "👎").click().run()
     assert any("의견 감사합니다" in c.value for c in at.caption)
 
-    next(b for b in at.button if b.label == "대화 초기화").click().run()
+    next(b for b in at.button if b.label == "현재 대화 지우기").click().run()
     assert not at.exception
-    assert not at.session_state.messages
+    assert not _messages(at)
     assert "fb_q42" not in at.session_state
     assert not any("의견 감사합니다" in c.value for c in at.caption)
 
@@ -263,10 +278,12 @@ def test_admin_page_renders_metrics_with_fake_stats(monkeypatch):
         "questions": 12, "sessions": 4, "median_s": 9.5, "max_s": 31.0,
         "error_rate": 0.25, "ungrounded_rate": 0.5, "up": 3, "down": 2})
     monkeypatch.setattr(s, "by_service", lambda conn, since: [("Network/VPC", 5, 2, 1)])
+    monkeypatch.setattr(s, "daily", lambda conn, since: [])
     monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
     monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 100, "services": 7, "last_ingested_at": None})
+    monkeypatch.setattr(s, "search", lambda conn, since, text, limit=50: [])
 
     at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
     at.run()
@@ -309,10 +326,12 @@ def _fake_admin_stats(monkeypatch):
         "questions": 12, "sessions": 4, "median_s": 9.5, "max_s": 31.0,
         "error_rate": 0.25, "ungrounded_rate": 0.5, "up": 3, "down": 2})
     monkeypatch.setattr(s, "by_service", lambda conn, since: [("Network/VPC", 5, 2, 1)])
+    monkeypatch.setattr(s, "daily", lambda conn, since: [])
     monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
     monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
     monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 100, "services": 7, "last_ingested_at": None})
+    monkeypatch.setattr(s, "search", lambda conn, since, text, limit=50: [])
 
 
 def test_admin_page_open_when_admin_token_is_empty(monkeypatch):
@@ -354,3 +373,248 @@ def test_admin_page_requires_token_when_admin_token_is_set(monkeypatch):
     assert not at.exception
     at.run()
     assert any(m.value == "12" for m in at.metric)
+
+
+def test_admin_search_calls_search_and_shows_chart(monkeypatch):
+    import admin_stats as s, admin_page, schema_ready, admin_auth
+    from datetime import date, datetime, timezone
+    calls = []
+    monkeypatch.setattr(admin_auth, "required_token", lambda: "")
+    monkeypatch.setattr(schema_ready, "ensure_schema", lambda: None)
+    monkeypatch.setattr(admin_page, "get_conn", lambda: types.SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(s, "summary", lambda conn, since: {"questions": 1, "sessions": 1, "median_s": 1.0, "max_s": 1.0, "error_rate": 0.0, "ungrounded_rate": 0.0, "up": 0, "down": 1})
+    monkeypatch.setattr(s, "by_service", lambda conn, since: [])
+    monkeypatch.setattr(s, "daily", lambda conn, since: [(date.today(), 1, 1.0, 1)])
+    monkeypatch.setattr(s, "recent_down", lambda conn, since, limit=20: [(datetime.now(timezone.utc), "q", "Network/VPC", "짧은", "긴 답변 전문", [])])
+    monkeypatch.setattr(s, "recent_ungrounded", lambda conn, since, limit=20: [])
+    monkeypatch.setattr(s, "recent_slow", lambda conn, since, limit=20, threshold_ms=30000: [])
+    monkeypatch.setattr(s, "index_status", lambda conn: {"chunks": 1, "services": 1, "last_ingested_at": None})
+    monkeypatch.setattr(s, "search", lambda conn, since, text, limit=50: calls.append(text) or [])
+    at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert any("긴 답변 전문" in m.value for m in at.markdown)
+    at.text_input[0].set_value("서브넷").run()
+    assert "서브넷" in calls
+
+
+def test_source_card_html_numbers_and_links():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path="Network/DNS Plus/콘솔 사용 가이드.html", service="Network/DNS Plus",
+                  doc_type="console", score=1.0, section_path="레코드 세트 관리 > 레코드 세트 생성",
+                  source_url="https://docs.nhncloud.com/ko/x/")
+    html = chat_page.source_card_html(2, c)
+    assert "[2]" in html and "콘솔 사용 가이드" in html and "Network/DNS Plus" in html
+    assert "레코드 세트 관리 › 레코드 세트 생성" in html
+    assert 'href="https://docs.nhncloud.com/ko/x/"' in html and "원문" in html
+
+
+def test_source_card_without_url_has_no_link():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path="A/B/C.html", service="A/B", doc_type="other", score=0.0)
+    html = chat_page.source_card_html(1, c)
+    assert "href=" not in html and "[1]" in html
+
+
+def test_sources_render_as_cards_not_expander(app):
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not any("참고한 문서" in e.label for e in at.expander)
+    assert any("[1]" in m.value and "nhn-cite-card" in m.value for m in at.markdown)
+
+
+def test_source_card_html_rejects_non_http_scheme():
+    """javascript: 같은 스킴은 링크로 만들지 않는다 — http(s) 만 허용한다."""
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path="A/B/C.html", service="A/B", doc_type="other", score=0.0,
+                  source_url="javascript:alert(1)")
+    html_out = chat_page.source_card_html(1, c)
+    assert "<a" not in html_out
+    assert "원문" not in html_out
+
+
+def test_source_card_html_escapes_corpus_values():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path='a<b>"c.html', service="A/B", doc_type="other", score=0.0,
+                  section_path="x > <script>", source_url='https://x/?a="b"')
+    html_out = chat_page.source_card_html(1, c)
+    assert "<script>" not in html_out
+    assert "&quot;" in html_out
+    assert "[1]" in html_out
+
+
+def test_status_shows_candidate_chips(app):
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    status_texts = [m.value for m in at.markdown if "nhn-progress-chip" in m.value]
+    assert status_texts, "status 안에 후보 칩이 없다"
+    assert any("콘솔 사용 가이드" in t and "서브넷 생성" in t for t in status_texts)
+    # 답변이 끝나면 status 는 접혀 있어야 한다 (칩이 안 보였던 진행 칩 버그의 재발 방지).
+    # AppTest 가 expanded 를 노출하지 않는 streamlit 버전도 있으니 있을 때만 확인한다.
+    if hasattr(at.status[0], "expanded"):
+        assert at.status[0].expanded is False
+
+
+def test_candidate_chip_text():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="", source_path="Network/VPC/콘솔 사용 가이드.html", service="Network/VPC",
+                  doc_type="console", score=0.0, section_path="서브넷 > 서브넷 생성")
+    assert chat_page.candidate_chip(c) == "Network/VPC · 콘솔 사용 가이드 › 서브넷 › 서브넷 생성"
+
+
+def test_zoom_button_exists_and_opens_without_error(app, monkeypatch, tmp_path):
+    at, _ = app
+    import chat_page
+    img_dir = tmp_path / "Network" / "VPC" / "images"
+    img_dir.mkdir(parents=True)
+    (img_dir / "a.png").write_bytes(PNG_1X1)
+    monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    zoom = [b for b in at.button if b.label == "크게 보기"]
+    assert zoom, "크게 보기 버튼이 없다"
+    zoom[0].click().run()
+    assert not at.exception
+
+
+def test_zoom_key_is_stable_per_question_and_image():
+    import chat_page
+    assert chat_page.zoom_key(42, 1, 0) == "zoom_q42_1"
+    assert chat_page.zoom_key(42, 1, 7) == "zoom_s7_1"
+
+
+def test_examples_are_screenshot_rich_services():
+    import chat_page
+    assert chat_page.EXAMPLES == [
+        "DNS Plus에서 레코드 세트를 생성하는 방법", "SMS 발신 번호를 등록하는 절차",
+        "인스턴스를 생성하는 방법", "Cloud Monitoring에서 대시보드를 생성하는 방법",
+    ]
+
+
+def test_regenerate_reasks_same_question(app):
+    at, calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    searches = [c for c in calls if c[0] == "search"]
+    assert len(searches) == 1
+    regen = [b for b in at.button if b.label == "다시 생성"]
+    assert regen
+    regen[0].click().run()
+    searches = [c for c in calls if c[0] == "search"]
+    assert len(searches) == 2 and searches[1][1] == "서브넷 만드는 법"
+    # 이전 답변은 남고 새 답변이 붙는다
+    assert sum(1 for m in _messages(at) if m["role"] == "assistant") == 2
+
+
+def test_empty_screen_shows_hint(app):
+    at, _ = app
+    at.run()
+    assert any("서비스 이름을 함께 쓰면" in m.value for m in at.markdown)
+
+
+def test_regenerate_with_images_renders_two_distinct_zoom_buttons(app, monkeypatch, tmp_path):
+    """다시 생성으로 답변이 하나 더 붙어도(둘 다 스크린샷 포함) 확대 버튼 키가 겹치지 않는다."""
+    import chat_page
+
+    img_dir = tmp_path / "Network" / "VPC" / "images"
+    img_dir.mkdir(parents=True)
+    (img_dir / "a.png").write_bytes(PNG_1X1)
+    monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
+
+    at, _calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+
+    regen = [b for b in at.button if b.label == "다시 생성"]
+    assert regen
+    regen[0].click().run()
+    assert not at.exception
+
+    zoom = [b for b in at.button if b.label == "크게 보기"]
+    assert len(zoom) == 2
+    assert len({b.key for b in zoom}) == 2
+
+
+def test_new_conversation_and_switch(app):
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert len(at.session_state["conversations"]) == 1
+    assert at.session_state["conversations"][0]["title"].startswith("서브넷 만드는 법")
+    new_btn = [b for b in at.sidebar.button if b.label == "새 대화"][0]
+    new_btn.click().run()
+    assert len(at.session_state["conversations"]) == 2
+    assert at.session_state["conversations"][0]["messages"] == []
+    # 이전 대화로 전환
+    prev = [b for b in at.sidebar.button if b.label.startswith("서브넷 만드는 법")][0]
+    prev.click().run()
+    cur = next(c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"])
+    assert len(cur["messages"]) == 2
+
+
+def test_empty_screen_mentions_conversations_are_session_only(app):
+    at, _ = app
+    at.run()
+    assert any("대화 목록은 브라우저 탭을 닫으면 사라집니다" in m.value for m in at.markdown)
+
+
+def test_regenerate_still_clickable_after_thumbs_down(app):
+    """👎 를 눌러 '의견 감사합니다' 캡션만 남아도 다시 생성은 계속 누를 수 있다."""
+    at, calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    next(b for b in at.button if b.label == "👎").click().run()
+    assert any("의견 감사합니다" in c.value for c in at.caption)
+
+    regen = [b for b in at.button if b.label == "다시 생성"]
+    assert regen, "투표 뒤에도 다시 생성 버튼이 있어야 한다"
+    searches_before = len([c for c in calls if c[0] == "search"])
+    regen[0].click().run()
+    assert not at.exception
+    searches_after = len([c for c in calls if c[0] == "search"])
+    assert searches_after == searches_before + 1
+
+
+def test_last_service_is_per_conversation(app):
+    """서비스 자동 추정 기억(last_service)은 대화마다 따로 간다 — 새 대화는 물려받지 않는다."""
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("VPC 서브넷 만드는 법").run()
+    conv_a = next(c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"])
+    assert conv_a["last_service"] == "Network/VPC"
+
+    new_btn = [b for b in at.sidebar.button if b.label == "새 대화"][0]
+    new_btn.click().run()
+    conv_b = next(c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"])
+    assert conv_b["id"] != conv_a["id"]
+    assert conv_b["last_service"] is None
+
+
+def test_clear_current_leaves_other_conversations_feedback_intact(app):
+    """'현재 대화 지우기'는 이 대화의 fb_* 만 지우고 다른 대화의 fb_* 는 남긴다."""
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    next(b for b in at.button if b.label == "👍").click().run()
+    assert "fb_q42" in at.session_state
+
+    new_btn = [b for b in at.sidebar.button if b.label == "새 대화"][0]
+    new_btn.click().run()
+    at.chat_input[0].set_value("오브젝트 스토리지 사용법").run()
+    next(b for b in at.button if b.label == "👍").click().run()
+    fb_keys_before = {k for k in at.session_state if k.startswith("fb_q")}
+    assert len(fb_keys_before) == 2
+
+    next(b for b in at.sidebar.button if b.label == "현재 대화 지우기").click().run()
+    assert not at.exception
+    assert "fb_q42" in at.session_state
+    fb_keys_after = {k for k in at.session_state if k.startswith("fb_q")}
+    assert fb_keys_after == {"fb_q42"}

@@ -69,6 +69,7 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
   font-size: 1.5rem; font-weight: 700; color: var(--nhn-dark); margin: 0 0 0.5rem;
 }
 .nhn-empty p { color: var(--nhn-gray-700); font-size: 0.9rem; margin: 0; }
+.nhn-hint { text-align:center; font-size:0.8rem; color: var(--nhn-gray-700); margin-bottom: 1rem; }
 
 /* ---------- 채팅 버블 ---------- */
 [data-testid="stChatMessage"] {
@@ -131,10 +132,12 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
   background: var(--nhn-blue-700); color: #fff; border-radius: var(--nhn-radius-8);
 }
 .nhn-answer-tag { margin: 0 0 0.5rem 0; }
-.nhn-source-row { margin-bottom: 0.6rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; }
-.nhn-source-chip a { color: inherit; text-decoration: none; }
-.nhn-source-chip a:hover { text-decoration: underline; }
 .nhn-section { font-size: 0.72rem; color: var(--nhn-gray-700); margin-left: 0.3rem; }
+.nhn-cite-card { font-size: 0.8rem; padding: 0.3rem 0.5rem; margin-top: 0.25rem; border-left: 3px solid var(--nhn-blue-200); background: var(--nhn-blue-100); border-radius: 0 var(--nhn-radius-8) var(--nhn-radius-8) 0; }
+.nhn-cite-no { color: var(--nhn-blue-800); font-weight: 700; margin-right: 0.2rem; }
+.nhn-cite-card a { color: var(--nhn-blue-800); text-decoration: none; margin-left: 0.3rem; }
+.nhn-cite-card a:hover { text-decoration: underline; }
+.nhn-progress-chip { font-size: 0.75rem; color: var(--nhn-gray-700); padding: 0.1rem 0; }
 
 /* ---------- 입력창 ---------- */
 [data-testid="stChatInput"] {
@@ -171,6 +174,16 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
 .stButton button:hover {
   border-color: var(--nhn-blue-700); color: var(--nhn-blue-700);
   background: var(--nhn-blue-100);
+}
+
+/* 대화 목록 — 긴 제목은 한 줄로 자르고, 지금 보고 있는 대화(primary)만 파랗게 */
+[data-testid="stSidebar"] .stButton button p {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;
+}
+[data-testid="stSidebar"] .stButton button[kind="primary"],
+[data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] {
+  background: var(--nhn-blue-100); border-color: var(--nhn-blue-700);
+  color: var(--nhn-blue-700); font-weight: 700;
 }
 
 /* 상태 박스 */
