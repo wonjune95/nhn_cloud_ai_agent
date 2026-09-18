@@ -166,6 +166,7 @@ pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragd
 ```
 kubectl -n nhn-docs-bot create secret generic admin --from-literal=ADMIN_TOKEN="$(openssl rand -base64 24)"
 kubectl -n nhn-docs-bot get secret admin -o jsonpath='{.data.ADMIN_TOKEN}' | base64 -d
+# PowerShell:  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n nhn-docs-bot get secret admin -o jsonpath='{.data.ADMIN_TOKEN}')))
 ```
 
 | 구분 | 내용 |

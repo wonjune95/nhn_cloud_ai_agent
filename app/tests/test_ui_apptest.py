@@ -367,12 +367,12 @@ def test_admin_page_requires_token_when_admin_token_is_set(monkeypatch):
     assert any("토큰이 올바르지 않습니다" in e.value for e in at.error)
     assert not at.metric
 
-    # 맞는 토큰: 세션에 저장되고 rerun 후 지표가 보인다.
+    # 맞는 토큰: 값이 들어온 rerun 에서 바로 검사되어 세션에 저장되고, 게이트(입력창·버튼)가 사라진다.
     at.text_input[0].input("s3cret").run()
-    at.button[0].click().run()
     assert not at.exception
     at.run()
     assert any(m.value == "12" for m in at.metric)
+    assert not any(t.label == "관리자 토큰" for t in at.text_input)  # 검색창은 남고 토큰 입력창만 사라진다
 
 
 def test_admin_search_calls_search_and_shows_chart(monkeypatch):
@@ -618,3 +618,18 @@ def test_clear_current_leaves_other_conversations_feedback_intact(app):
     assert "fb_q42" in at.session_state
     fb_keys_after = {k for k in at.session_state if k.startswith("fb_q")}
     assert fb_keys_after == {"fb_q42"}
+
+
+def test_admin_token_accepts_enter_and_trims_whitespace(monkeypatch):
+    """확인 버튼 없이 Enter(=rerun)만으로도 검사되고, 붙여넣기 공백은 무시된다."""
+    import admin_auth
+
+    _fake_admin_stats(monkeypatch)
+    monkeypatch.setattr(admin_auth, "required_token", lambda: "s3cret")
+
+    at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
+    at.run()
+    at.text_input[0].input("  s3cret \n").run()   # 버튼 클릭 없이 값만 넣고 rerun
+    assert not at.exception
+    at.run()
+    assert any(m.value == "12" for m in at.metric)
