@@ -12,6 +12,13 @@ from rag import Candidate, ImageRef
 # 저장소 루트 기준의 app/ui.py 를 절대 경로로 넘겨야 한다.
 UI_PATH = str(pathlib.Path(__file__).resolve().parents[1] / "ui.py")
 
+# 1x1 투명 PNG. 여러 테스트가 스크린샷 파일로 재사용한다.
+PNG_1X1 = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+    b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 def fake_index(monkeypatch, calls):
     """rag 의 무거운 부분을 가짜로 바꾼다. calls 에 검색 인자와 피드백 호출을 기록한다."""
@@ -104,12 +111,7 @@ def test_markers_become_images(app, monkeypatch, tmp_path):
 
     png = tmp_path / "Network" / "VPC" / "images"
     png.mkdir(parents=True)
-    # 1x1 투명 PNG.
-    (png / "a.png").write_bytes(
-        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
-        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
-        b"\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
+    (png / "a.png").write_bytes(PNG_1X1)
     monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
 
     at, _calls = app
@@ -410,3 +412,25 @@ def test_candidate_chip_text():
     c = Candidate(content="", source_path="Network/VPC/콘솔 사용 가이드.html", service="Network/VPC",
                   doc_type="console", score=0.0, section_path="서브넷 > 서브넷 생성")
     assert chat_page.candidate_chip(c) == "Network/VPC · 콘솔 사용 가이드 › 서브넷 › 서브넷 생성"
+
+
+def test_zoom_button_exists_and_opens_without_error(app, monkeypatch, tmp_path):
+    at, _ = app
+    import chat_page
+    img_dir = tmp_path / "Network" / "VPC" / "images"
+    img_dir.mkdir(parents=True)
+    (img_dir / "a.png").write_bytes(PNG_1X1)
+    monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    zoom = [b for b in at.button if b.label == "크게 보기"]
+    assert zoom, "크게 보기 버튼이 없다"
+    zoom[0].click().run()
+    assert not at.exception
+
+
+def test_zoom_key_is_stable_per_question_and_image():
+    import chat_page
+    assert chat_page.zoom_key(42, 1, 0) == "zoom_q42_1"
+    assert chat_page.zoom_key(42, 1, 7) == "zoom_s7_1"
+    assert chat_page.zoom_key(None, 2, 0) == "zoom_x_2"

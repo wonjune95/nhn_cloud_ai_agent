@@ -75,13 +75,37 @@ def render_progress_chips(slot, cands, limit=5):
     )
 
 
-def render_answer(text, image_map):
+def zoom_key(question_id, n, seq):
+    """스크린샷 확대 버튼 키. 같은 질문·같은 그림이면 재렌더(리런/기록 다시 그리기) 사이에도 같은 키를 써야
+    Streamlit 이 다른 위젯으로 취급하지 않는다.
+
+    seq(세션 카운터)가 있으면 항상 seq 를 우선한다 — 답변 직후 첫 렌더는 question_id 를
+    아직 모르고, 기록을 다시 그릴 때는 question_id 를 알지만 seq 도 메시지에 같이 저장해
+    두므로, seq 를 우선하면 두 렌더가 항상 같은 키를 쓰게 된다.
+    """
+    if seq:
+        return f"zoom_s{seq}_{n}"
+    if question_id is not None:
+        return f"zoom_q{question_id}_{n}"
+    return f"zoom_x_{n}"
+
+
+@st.dialog("스크린샷", width="large")
+def show_screenshot(path: str, caption: str):
+    if not os.path.isfile(path):
+        st.warning("스크린샷 파일을 찾을 수 없습니다")
+        return
+    st.image(path, caption=caption or None, width="stretch")
+
+
+def render_answer(text, image_map, question_id=None, seq=0):
     """{{img:N}} 을 스크린샷으로 바꿔 그린다. 파일이 없으면 그 그림만 건너뛴다 (스펙 6절).
 
     part.path 는 문서 청크의 images 필드에서 온 값이라 신뢰하지 않는다 —
     '../' 로 DOCS_DIR 밖을 가리키면 무시하고, st.image 실패도 그 그림만 건너뛴다.
     """
     docs_root = os.path.realpath(DOCS_DIR)
+    k = 0
     for kind, part in ar.split_markers(text, image_map or {}):
         if kind == "text":
             st.markdown(part)
@@ -93,8 +117,11 @@ def render_answer(text, image_map):
         if not os.path.isfile(full):
             print(f"  [스크린샷] 파일 없음: {full}", file=sys.stderr)
             continue
+        k += 1
         try:
             st.image(full, caption=part.caption or None)
+            if st.button("크게 보기", key=zoom_key(question_id, k, seq)):
+                show_screenshot(full, part.caption)
         except Exception as e:
             print(f"  [스크린샷] 표시 실패: {full}: {e}", file=sys.stderr)
 
@@ -159,7 +186,7 @@ def render_assistant(msg):
         service_tag(msg.get("service"), msg.get("intent", "general"))
         if msg.get("grounded") is None and not msg.get("error"):
             st.caption("관련도 확인 실패 — 검색 순서를 그대로 사용했습니다.")
-        render_answer(msg["content"], msg.get("image_map"))
+        render_answer(msg["content"], msg.get("image_map"), msg.get("question_id"), msg.get("seq", 0))
         # 실패한 턴은 cands 를 로그용으로만 들고 있다 — 기록을 다시 그릴 때도 출처를 보이면 안 된다.
         if msg.get("grounded") is not False and not msg.get("error"):
             render_sources(msg.get("cands") or [])
@@ -247,6 +274,11 @@ def answer_question(rag, question, chosen, top_k):
     st.session_state.messages.append({"role": "user", "content": question})
     user_bubble(question)
 
+    # 확대 버튼 키에 쓸 세션 카운터. question_id 는 로그 저장(qlog.log_question) 뒤에야
+    # 나오므로, 답변 직후 첫 렌더는 이 값으로 키를 만든다(zoom_key 참고).
+    seq = st.session_state.get("seq", 0) + 1
+    st.session_state.seq = seq
+
     t0 = time.time()
     cands, image_map, grounded = [], {}, None
     service, intent, search_q = None, "general", question
@@ -291,7 +323,7 @@ def answer_question(rag, question, chosen, top_k):
                     answer = st.write_stream(stream)
                 holder.empty()
                 with holder.container():
-                    render_answer(answer, image_map)
+                    render_answer(answer, image_map, seq=seq)
                 render_sources(cands)
         except Exception as e:
             answer = "⚠️ 모델 서버가 일시적으로 혼잡해 답변을 만들지 못했습니다. 잠시 후 다시 질문해 주세요."
@@ -314,5 +346,5 @@ def answer_question(rag, question, chosen, top_k):
     st.session_state.messages.append({
         "role": "assistant", "content": answer, "cands": cands, "image_map": image_map,
         "service": service, "intent": intent, "grounded": grounded,
-        "question_id": question_id, "error": failed,
+        "question_id": question_id, "error": failed, "seq": seq,
     })
