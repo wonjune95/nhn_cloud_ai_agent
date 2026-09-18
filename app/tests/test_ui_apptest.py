@@ -471,3 +471,27 @@ def test_empty_screen_shows_hint(app):
     at, _ = app
     at.run()
     assert any("서비스 이름을 함께 쓰면" in m.value for m in at.markdown)
+
+
+def test_regenerate_with_images_renders_two_distinct_zoom_buttons(app, monkeypatch, tmp_path):
+    """다시 생성으로 답변이 하나 더 붙어도(둘 다 스크린샷 포함) 확대 버튼 키가 겹치지 않는다."""
+    import chat_page
+
+    img_dir = tmp_path / "Network" / "VPC" / "images"
+    img_dir.mkdir(parents=True)
+    (img_dir / "a.png").write_bytes(PNG_1X1)
+    monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
+
+    at, _calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+
+    regen = [b for b in at.button if b.label == "다시 생성"]
+    assert regen
+    regen[0].click().run()
+    assert not at.exception
+
+    zoom = [b for b in at.button if b.label == "크게 보기"]
+    assert len(zoom) == 2
+    assert len({b.key for b in zoom}) == 2

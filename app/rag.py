@@ -391,6 +391,9 @@ def retrieval_query(question, history=None):
     prev = last_user_question(history)
     if not prev:
         return question
+    if prev == question:
+        # 같은 질문을 다시 물으면 앞 질문을 붙이지 않는다 — 다시 생성.
+        return question
 
     looks_followup = len(question) < 20 or any(h in question for h in FOLLOWUP_HINTS)
     return f"{prev} {question}" if looks_followup else question

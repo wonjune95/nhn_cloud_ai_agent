@@ -161,28 +161,28 @@ def feedback_buttons(question_id, question=None, seq=0):
     """👍/👎 와 다시 생성. 누르면 바로 저장하고 자리에 결과 문구를 남긴다.
 
     다시 생성 은 같은 question 을 pending 에 넣고 rerun 해 새 답변을 뒤에 덧붙인다
-    (이전 답변은 지우지 않는다) — question 이 있을 때만 그린다.
+    (이전 답변은 지우지 않는다) — question 이 있을 때만 그린다. 이미 투표해 '의견
+    감사합니다' 캡션만 보이는 자리에서도 다시 생성은 계속 눌러야 하므로, 그 캡션(과
+    저장 실패 캡션)보다 먼저 그린다.
     """
+    key = feedback_key(question_id) if question_id is not None else None
+    regen_key = f"regen_{key}" if key is not None else f"regen_s{seq}"
+    if question and st.button("다시 생성", key=regen_key):
+        st.session_state.pending = question
+        st.rerun()
+
     if question_id is None:
         # 로그 저장(qlog.log_question)이 실패해 id 가 없으면 피드백을 걸 자리가 없다 (스펙 6절).
         st.caption("저장 실패 — 피드백을 기록할 수 없습니다")
-        if question:
-            if st.button("다시 생성", key=f"regen_s{seq}"):
-                st.session_state.pending = question
-                st.rerun()
         return
-    key = feedback_key(question_id)
     if key in st.session_state:
         st.caption(st.session_state[key])
         return
-    up, down, regen, _ = st.columns([1, 1, 2, 6])
+    up, down, _ = st.columns([1, 1, 8])
     if up.button("👍", key=f"{key}_up"):
         _save_feedback(key, question_id, 1)
     if down.button("👎", key=f"{key}_down"):
         _save_feedback(key, question_id, -1)
-    if question and regen.button("다시 생성", key=f"regen_{key}"):
-        st.session_state.pending = question
-        st.rerun()
 
 
 def _save_feedback(key, question_id, value):
@@ -285,10 +285,11 @@ def page():
 
 
 def answer_question(rag, question, chosen, top_k):
-    # '다시 생성' 은 같은 질문을 다시 보낸다 — 직전에 같은 질문을 물은 적이 있으면
-    # rag.retrieval_query 의 후속 질문 판정(길이 20자 미만)이 그 질문 자체를 직전 질문으로
-    # 오인해 "질문 질문" 처럼 검색어를 두 번 붙인다. 같은 문구의 과거 질문은 맥락에서 뺀다.
-    history = [m for m in st.session_state.messages if not (m["role"] == "user" and m["content"] == question)]
+    # '다시 생성' 이 같은 질문을 다시 보내는 경우의 검색어 중복(질문이 자기 자신을 후속
+    # 질문으로 오인)은 rag.retrieval_query 에서 처리한다(prev == question 이면 안 붙임).
+    # 여기서 history 를 걸러내면 답변(어시스턴트) 턴만 남아 rag.answer_stream 의 프롬프트에
+    # 질문 없는 고아 답변 턴이 들어가 다시 생성이 이전 답변을 되풀이하기 쉬워진다.
+    history = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": question})
     user_bubble(question)
 
