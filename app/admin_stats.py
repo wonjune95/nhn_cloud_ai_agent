@@ -15,10 +15,14 @@ def since_for(period: str) -> datetime | None:
 
 def _rows(conn, sql, params):
     cur = conn.cursor()
-    cur.execute(sql, params)
-    out = cur.fetchall()
-    cur.close()
-    return out
+    try:
+        cur.execute(sql, params)
+        return cur.fetchall()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
 
 
 def summary(conn, since) -> dict:

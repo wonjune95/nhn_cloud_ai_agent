@@ -89,3 +89,10 @@ def test_index_status_reads_documents(seeded):
     import admin_stats as s
     r = s.index_status(seeded)
     assert r["chunks"] == 0 and r["services"] == 0 and r["last_ingested_at"] is None
+
+
+def test_rows_rolls_back_on_error_so_connection_stays_usable(seeded):
+    import admin_stats as s
+    with pytest.raises(Exception):
+        s._rows(seeded, "SELECT * FROM no_such_table", {})
+    assert s.summary(seeded, None)["questions"] == 5
