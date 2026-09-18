@@ -138,6 +138,15 @@ def test_build_prompt_includes_history():
     assert "사용자: VPC 가 뭐야" in prompt
 
 
+def test_build_prompt_header_drops_empty_service_segment():
+    """'Compute/_' 처럼 서비스 구간이 없는 문서는 머리말에 카테고리만 쓴다 —
+    '_' 를 서비스로 읽은 모델이 없는 메뉴 경로를 지어내지 않게 (스펙 3-2)."""
+    c = cand("Quickstart", service="Compute/_")
+    prompt, _ = rag.build_prompt("q", [c])
+    assert "서비스: Compute ·" in prompt
+    assert "Compute/_" not in prompt
+
+
 def test_build_prompt_falls_back_to_source_path_without_url():
     c = cand("a")
     c.source_url = None
@@ -226,6 +235,9 @@ def test_system_prompt_by_intent():
 
 def test_console_prompt_spells_out_format_rules():
     p = rag.CONSOLE_SYSTEM_PROMPT
+    # 콘솔에 없는 분류나 서비스 구간이 없는 문서는 카테고리까지만 쓴다.
+    assert "콘솔 > 카테고리' 까지만" in p
+    assert "Quickstarts" in p
     # 첫 줄은 문서 머리말의 '서비스: 카테고리/서비스' 에서 만든다.
     assert "콘솔 > 카테고리 > 서비스" in p
     assert "서비스: 카테고리/서비스" in p
@@ -270,6 +282,18 @@ def test_enrich_images_borrows_from_siblings_in_same_doc_and_section(monkeypatch
     assert len(out[0].images) == rag.SIBLING_IMAGE_CAP
     # 나머지 필드는 그대로다.
     assert out[0].content == target.content and out[0].section_path == target.section_path
+
+
+def test_enrich_images_borrows_when_own_images_are_all_remote(monkeypatch):
+    """원격 src 만 든 후보는 '이미지 없음' 과 같다 — number_images 가 건너뛰는 그림이므로 이웃에서 빌려온다."""
+    target = chunk("절차", images=[img("https://example.com/remote.png")])
+    monkeypatch.setattr(rag, "bm25_meta", [
+        chunk("옆", section="서브넷 생성 > 2단계", images=[img("p/1.png")]),
+    ])
+
+    out = rag.enrich_images([target], "console")
+
+    assert [i["path"] for i in out[0].images] == ["p/1.png"]
 
 
 def test_enrich_images_leaves_candidate_with_images_alone(monkeypatch):

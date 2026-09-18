@@ -17,6 +17,8 @@ spec:
     spec:
       # 크롤이 실패하면 다음 달 또는 수동 실행으로 — 자동 재시도는 사이트에 부담만 준다.
       backoffLimit: 0
+      # 크롤이 멈추면 6시간 뒤 실패 처리 — Forbid 가 다음 달 실행을 막지 않게.
+      activeDeadlineSeconds: 21600
       template:
         spec:
           restartPolicy: Never
@@ -32,8 +34,8 @@ spec:
           initContainers:
             # NFS 는 fsGroup 을 무시하므로 예전에 root 로 복사된 파일을 uid 1000 이 쓸 수 있게 한 번 맞춘다.
             - name: fix-perms
-              image: busybox:1.36
-              command: ["sh", "-c", "chown -R 1000:1000 /docs || true"]
+              image: harbor.114-110-181-178.nip.io/nnd/busybox:1.36
+              command: ["sh", "-c", "chown -R 1000:1000 /docs || echo '[경고] chown 실패 — NFS root_squash 인지 확인; crawl 이 쓰기 실패할 수 있음'"]
               securityContext:
                 runAsUser: 0
                 runAsNonRoot: false
@@ -74,9 +76,11 @@ spec:
                   readOnly: true
           containers:
             # BM25 는 프로세스 메모리에 있어 재적재 뒤 UI 를 다시 띄워야 한다.
+            # 기본 이미지는 Harbor 에 미러해 둔 것을 쓴다 (bitnami/kubectl 태그는 Docker Hub 에서 내려갔다).
+            # 공식 registry.k8s.io/kubectl 은 distroless 라 셸이 없고 바이너리는 /bin/kubectl 이다.
             - name: restart
-              image: bitnami/kubectl:1.31
-              command: ["kubectl"]
+              image: harbor.114-110-181-178.nip.io/nnd/kubectl:v1.34.3
+              command: ["/bin/kubectl"]
               args: ["-n", "nhn-docs-bot", "rollout", "restart", "deploy/ui"]
               resources:
                 requests: { cpu: 50m, memory: 64Mi }

@@ -241,7 +241,6 @@ def answer_question(rag, question, chosen, top_k):
                 found = rag.hybrid_search(search_q, intent=intent, service=service, top_k=CANDIDATES)
                 status.update(label=f"2/3 관련도 평가 ({len(found)}건)")
                 cands, grounded = rag.rerank_candidates(search_q, found, top_k=top_k)
-                cands = rag.enrich_images(cands, intent)
                 status.update(label=f"3/3 답변 생성 · 검색 {time.time() - t0:.1f}초", state="complete")
 
             service_tag(service, intent)
@@ -253,6 +252,8 @@ def answer_question(rag, question, chosen, top_k):
             else:
                 if grounded is None:
                     st.caption("관련도 확인 실패 — 검색 순서를 그대로 사용했습니다.")
+                # 이웃 청크 이미지 차용은 답변을 만들 때만 필요하다 (거부 답변에는 그림이 없다).
+                cands = rag.enrich_images(cands, intent)
                 stream, image_map = rag.answer_stream(question, cands, history, intent=intent)
                 holder = st.empty()
                 with holder.container():

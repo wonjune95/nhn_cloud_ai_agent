@@ -122,6 +122,49 @@ def test_markers_become_images(app, monkeypatch, tmp_path):
     assert all("{{img:" not in m.value for m in at.markdown)
 
 
+def test_sibling_images_are_borrowed_and_rendered(app, monkeypatch, tmp_path):
+    """이미지가 없는 후보도 같은 문서·같은 최상위 섹션의 이웃 청크 스크린샷을 빌려 화면에 그린다.
+
+    rag.enrich_images → rag.build_prompt(번호 매기기) → chat_page.render_answer 까지의 배선을 본다.
+    """
+    import chat_page
+    from dataclasses import replace
+
+    png = tmp_path / "Network" / "VPC" / "images"
+    png.mkdir(parents=True)
+    (png / "sib.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
+
+    target = Candidate(content="절차 본문", source_path="Network/VPC/콘솔 사용 가이드.html",
+                       service="Network/VPC", doc_type="console", score=1.0,
+                       section_path="서브넷 생성 > 3단계", source_url="https://x/", images=[])
+    sibling = replace(target, content="이웃 본문", section_path="서브넷 생성 > 2단계",
+                      images=[{"path": "Network/VPC/images/sib.png", "caption": "이웃 캡",
+                               "alt": "", "missing": False}])
+    monkeypatch.setattr(rag, "bm25_meta", [sibling])
+    monkeypatch.setattr(rag, "hybrid_search", lambda q, intent="general", service=None, top_k=20: [target])
+
+    def stream(question, cands, history=None, intent="general"):
+        # 순번표는 진짜 build_prompt 로 만든다 — 빌려온 이미지가 번호를 받는지까지 확인한다.
+        _prompt, image_map = rag.build_prompt(question, cands, history, intent=intent)
+        return iter(["단계 {{img:1}}"]), image_map
+
+    monkeypatch.setattr(rag, "answer_stream", stream)
+
+    at, _calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+
+    assert len(at.image) >= 1
+    assert any("이웃 캡" in c for img in at.image for c in img.captions)
+    assert all("{{img:" not in m.value for m in at.markdown)
+
+
 def test_traversal_image_path_is_skipped(app, monkeypatch, tmp_path):
     """DOCS_DIR 밖을 가리키는 이미지 경로(../..)는 그 그림만 건너뛰고 트레이스백도 없다."""
     import chat_page

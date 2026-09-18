@@ -1,0 +1,12 @@
+# 이미지 빌드 컨텍스트에서 뺄 것 (앱·크롤러 이미지 모두 저장소 루트를 컨텍스트로 쓴다).
+# 코퍼스는 수 GB 라 컨텍스트에 들어가면 빌드가 사실상 멈춘다.
+nhn_cloud_docs*/
+.git/
+*.log
+.env
+__pycache__/
+.superpowers/
+.pytest_cache/
+*.pyc
+# 크롤러 이미지에는 테스트를 담지 않는다 (app/ 쪽은 app/.dockerignore 가 맡는다).
+crawlling/tests/

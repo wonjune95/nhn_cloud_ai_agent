@@ -3,6 +3,7 @@ import importlib.util
 import os
 import pathlib
 import sys
+import types
 
 _spec = importlib.util.spec_from_file_location(
     "scoring", pathlib.Path(__file__).resolve().parents[2] / "eval" / "scoring.py")
@@ -36,10 +37,18 @@ def test_general_only_scores_hit():
 
 
 def test_outside_requires_fixed_message_and_no_sources():
-    r = scoring.judge(OUTSIDE, [], "제공된 문서에서 확인되지 않습니다.", 0, "제공된 문서에서 확인되지 않습니다.", 2.0, None)
+    r = scoring.judge(OUTSIDE, [], "제공된 문서에서 확인되지 않습니다.", 0, "제공된 문서에서 확인되지 않습니다.", 2.0, None,
+                      sources_shown=False)
     assert r.outside_ok is True and r.hit5 is None
-    bad = scoring.judge(OUTSIDE, ["x"], "서울 날씨는", 0, "서울 날씨는 맑음", 2.0, None)
+    bad = scoring.judge(OUTSIDE, ["x"], "서울 날씨는", 0, "서울 날씨는 맑음", 2.0, None, sources_shown=True)
     assert bad.outside_ok is False
+
+
+def test_outside_ok_ignores_candidates_when_sources_are_not_shown():
+    """거부 답변은 검색 후보가 남아 있어도(적중 채점용) 출처를 보이지 않았으면 통과다."""
+    r = scoring.judge(OUTSIDE, ["x"], "제공된 문서에서 확인되지 않습니다.", 0,
+                      "제공된 문서에서 확인되지 않습니다.", 2.0, None, sources_shown=False)
+    assert r.outside_ok is True
 
 
 def test_error_marks_everything_failed():
@@ -90,6 +99,42 @@ def test_run_eval_sys_path_finds_rag_and_skips_main(capsys):
 
     captured = capsys.readouterr()
     assert captured.out == "" and captured.err == ""
+
+
+def _load_run_eval():
+    spec = importlib.util.spec_from_file_location(
+        "run_eval", pathlib.Path(__file__).resolve().parents[2] / "eval" / "run_eval.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_run_one_scores_hit5_even_when_not_grounded():
+    """근거 없음으로 답변을 생략해도 적중은 실제 검색 결과로 잰다 (검색 성능이 가려지면 안 된다)."""
+    run_eval = _load_run_eval()
+    c = types.SimpleNamespace(source_path=CONSOLE["expect_path"])
+
+    def no_llm(*a, **kw):
+        raise AssertionError("근거 없음이면 답변 생성을 부르지 않는다")
+
+    fake_rag = types.SimpleNamespace(
+        ALIASES={},
+        detect_intent=lambda q: "console",
+        detect_service=lambda q, aliases: "Network/DNS Plus",
+        hybrid_search=lambda q, intent=None, service=None: [c],
+        rerank_candidates=lambda q, found, top_k=5: ([c], False),
+        enrich_images=no_llm,
+        answer_stream=no_llm,
+    )
+    fake_ar = types.SimpleNamespace(
+        NOT_GROUNDED_MESSAGE=scoring.NOT_GROUNDED_MESSAGE,
+        valid_markers=lambda answer, image_map: [],
+    )
+
+    r = run_eval.run_one(fake_rag, fake_ar, CONSOLE)
+
+    assert r.error is None
+    assert r.hit5 is True
 
 
 def test_questions_file_shape():

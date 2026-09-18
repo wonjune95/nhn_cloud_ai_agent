@@ -83,6 +83,47 @@ def test_questions_table_exists(conn):
     cur.close()
 
 
+def _insert_dummy_docs(conn, paths):
+    """source_path 만 다른 최소 행. embedding 은 NULL 이어도 prune 판정에는 영향이 없다."""
+    cur = conn.cursor()
+    for i, path in enumerate(paths):
+        cur.execute(
+            """INSERT INTO documents
+               (content, category, service, doc_type, doc_title, section_path, source_path, content_hash)
+               VALUES (%s, 'Network', 'VPC', 'other', '더미', '절', %s, %s)""",
+            (f"본문 {i}", path, f"h{i}"),
+        )
+    conn.commit()
+    cur.close()
+
+
+def _doc_count(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT count(DISTINCT source_path) FROM documents")
+    n = cur.fetchone()[0]
+    cur.close()
+    return n
+
+
+def test_prune_refuses_to_delete_more_than_half(conn, monkeypatch, capsys):
+    """정리 대상이 절반을 넘으면(그리고 PRUNE_MIN_ROWS 보다 많으면) 아무것도 지우지 않는다."""
+    import db, ingest
+
+    db.init_schema(conn, dim=8, rebuild=True)
+    _insert_dummy_docs(conn, ["a", "b", "c", "d"])
+    assert _doc_count(conn) == 4
+
+    # 4건짜리 표로 '절반 초과' 만 보려고 최소 건수를 낮춘다 (운영 기본값은 10).
+    monkeypatch.setattr(ingest, "PRUNE_MIN_ROWS", 2)
+
+    assert ingest.prune_missing(conn, ["a"]) == 0           # 3/4 — 건너뛴다
+    assert _doc_count(conn) == 4
+    assert "절반 초과라 건너뜀" in capsys.readouterr().out
+
+    assert ingest.prune_missing(conn, ["a", "b", "c"]) == 1  # 1/4 — 정상 정리
+    assert _doc_count(conn) == 3
+
+
 def test_prune_removes_rows_for_deleted_files(docs_dir, conn):
     import ingest, os
 

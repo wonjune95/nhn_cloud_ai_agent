@@ -54,6 +54,18 @@ class ImageRef:
 
 CAPTION_CHARS = 60
 
+# 서비스 구간이 없는 문서(카테고리 바로 아래)의 표시. ingest.NO_SERVICE 와 같은 값이다.
+NO_SERVICE = "_"
+
+
+def _image_usable(img) -> bool:
+    """답변에 쓸 수 있는 이미지인지. missing 이 아니고, DOCS_DIR 로 열 수 있는 로컬 경로여야 한다.
+
+    크롤러가 못 받아 그대로 남긴 원격 src 는 화면에 못 띄우므로 번호도 매기지 않는다.
+    number_images 와 enrich_images 가 같은 기준을 쓰도록 판정은 여기 한 곳에만 둔다.
+    """
+    return not img.get("missing") and not img["path"].startswith(("http://", "https://"))
+
 
 def number_images(cands: list[Candidate]) -> tuple[dict[int, ImageRef], list[list[int]]]:
     """후보 순서대로 missing 아닌 이미지에 1부터 순번을 매긴다.
@@ -66,10 +78,7 @@ def number_images(cands: list[Candidate]) -> tuple[dict[int, ImageRef], list[lis
     for c in cands:
         nums: list[int] = []
         for img in c.images or []:
-            if img.get("missing"):
-                continue
-            if img["path"].startswith(("http://", "https://")):
-                # 원격 src(크롤러가 못 받아 그대로 남긴 외부 URL) — DOCS_DIR 로는 못 연다.
+            if not _image_usable(img):
                 continue
             n = len(image_map) + 1
             image_map[n] = ImageRef(path=img["path"], caption=(img.get("caption") or "")[:CAPTION_CHARS])
@@ -277,7 +286,7 @@ def _top_section(section_path: str) -> str:
 
 
 def _usable_images(cand: Candidate) -> list:
-    return [img for img in (cand.images or []) if not img.get("missing")]
+    return [img for img in (cand.images or []) if _image_usable(img)]
 
 
 def enrich_images(cands: list[Candidate], intent: str) -> list[Candidate]:
@@ -301,7 +310,10 @@ def enrich_images(cands: list[Candidate], intent: str) -> list[Candidate]:
         for sib in bm25_meta:
             if len(borrowed) >= SIBLING_IMAGE_CAP:
                 break
-            if sib.source_path != cand.source_path or sib.content == cand.content:
+            if sib.source_path != cand.source_path:
+                continue
+            # 자기 자신만 뺀다 — 본문만 비교하면 같은 문서 안의 같은 문구 청크까지 놓친다.
+            if sib.section_path == cand.section_path and sib.content == cand.content:
                 continue
             if _top_section(sib.section_path) != top:
                 continue
@@ -337,6 +349,8 @@ CONSOLE_SYSTEM_PROMPT = _SYSTEM_COMMON + (
     "본문에 그보다 아래 단계의 탭·메뉴 이름이 분명히 적혀 있을 때만 ' > ' 로 이어 붙여라 "
     "(예: '콘솔 > Network > VPC > Subnet'). 적혀 있지 않으면 카테고리·서비스까지만 쓰고, "
     "메뉴 경로를 비워 두거나 모른다고 쓰지 마라. "
+    "서비스 값에 '/' 뒤가 없거나(카테고리만) 콘솔에 없는 분류(Quickstarts, Downloads, 서드파티 사용 가이드, Dooray!)이면 "
+    "첫 줄은 '콘솔 > 카테고리' 까지만 쓴다. "
     "그다음 절차를 번호 목록으로 써라. 문서 블록에 '[그림 N]'으로 표시된 스크린샷이 어느 단계에 해당하면 "
     "그 단계 문장 끝에 {{img:N}} 를 붙여라 (예: '3. 서브넷 생성을 클릭합니다. {{img:2}}'). "
     "문서 블록에 없는 그림 번호는 절대 쓰지 마라. "
@@ -395,6 +409,15 @@ def format_history(history):
     return "이전 대화:\n" + "\n\n".join(lines) + "\n\n"
 
 
+def service_label(service: str) -> str:
+    """머리말에 쓸 서비스 표기. 'Compute/_' 처럼 서비스 구간이 없으면 카테고리만 준다.
+
+    '_' 를 서비스 이름으로 착각한 모델이 '콘솔 > Compute > _' 같은 없는 메뉴를 지어내기 때문이다.
+    """
+    category, _sep, svc = (service or "").partition("/")
+    return category if svc in ("", NO_SERVICE) else service
+
+
 def build_prompt(question, cands: list[Candidate], history=None, intent="general"):  # intent 는 시그니처 대칭용 — 프롬프트 본문은 의도와 무관하고 시스템 프롬프트만 바뀐다.
     """(프롬프트, 그림 순번표). 블록 머리말에 서비스·문서명·섹션·출처를 나란히 적어
     본문 첫 줄의 '문서명 > 섹션 경로' 가 콘솔 메뉴 경로로 오해되지 않게 하고,
@@ -405,7 +428,7 @@ def build_prompt(question, cands: list[Candidate], history=None, intent="general
     for i, (c, nums) in enumerate(zip(cands, per_cand), 1):
         doc_title = os.path.splitext(os.path.basename(c.source_path))[0]
         block = (
-            f"[문서 {i}] 서비스: {c.service} · 문서: {doc_title} · "
+            f"[문서 {i}] 서비스: {service_label(c.service)} · 문서: {doc_title} · "
             f"섹션: {c.section_path} · 출처: {c.source_url or c.source_path}\n{c.content}"
         )
         for n in nums:

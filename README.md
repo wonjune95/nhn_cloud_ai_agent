@@ -219,11 +219,13 @@ UI pod 안(NVIDIA NIM 무료 티어, 리랭킹은 추론 끔)에서 측정한 �
   주석에 있다.
 - 이미지는 두 개다: 앱 `nhn-docs-bot`(`app/Dockerfile`, 비root uid 1000 — UI·ingest·refresh
   CronJob 의 ingest 단계가 공용)와 크롤러 `nhn-docs-crawler`(`crawlling/Dockerfile`, 빌드
-  컨텍스트는 저장소 루트). 태그는 `2b-<git 짧은 해시>` 형식을 쓴다.
+  컨텍스트는 저장소 루트). 태그는 이번 단계에서 `2b2-<git 짧은 해시>` 형식을 쓴다
+  (스펙의 `2b-` 접두사를 단계별로 일반화한 것이다).
 - 배포 순서: 이미지 빌드·푸시 → `kubectl apply -f deploy/k8s/rbac.yaml -f
   deploy/k8s/httproute.yaml -f deploy/k8s/refresh-cronjob.yaml`(CronJob 은 apply 전에 이미지
   태그를 sed 로 바꾼다) → `kubectl -n nhn-docs-bot set image deploy/ui ui=<이미지>:<태그>` →
-  `kubectl -n nhn-docs-bot rollout status deploy/ui`.
+  `kubectl -n nhn-docs-bot rollout status deploy/ui`. UI 이미지를 올릴 때 refresh CronJob 도
+  같은 태그로 다시 apply 한다 — CronJob 의 ingest 컨테이너가 UI 와 같은 청커를 써야 한다.
 
 ### 운영 런북
 
@@ -322,9 +324,12 @@ kubectl -n nhn-docs-bot rollout restart deploy/ui
 그대로 쓰기 때문에 파드 밖에서 돌리면 DB/네트워크 설정을 따로 맞춰야 한다):
 
 ```
-kubectl -n nhn-docs-bot cp eval/ <ui-pod>:/app/eval/
+kubectl -n nhn-docs-bot cp eval <ui-pod>:/app/
 kubectl -n nhn-docs-bot exec <ui-pod> -- python -u eval/run_eval.py
 ```
+
+(`cp` 대상은 `/app/` 이다 — `/app/eval/` 로 주면 `/app/eval/eval/` 이 된다. `run_eval.py` 가
+파드 배치에서도 `rag` 를 찾도록 `sys.path` 를 스스로 채우므로 `PYTHONPATH` 는 필요 없다.)
 
 기준(모두 만족해야 통과, 미달이면 exit 1): hit@5 ≥ 80%, 메뉴 경로 정확도 ≥ 90%,
 스크린샷 마커 정확도 ≥ 80%, 범위 밖 질문 거부 5/5, 응답 시간 중앙값 ≤ 15초·최댓값
@@ -334,7 +339,8 @@ kubectl -n nhn-docs-bot exec <ui-pod> -- python -u eval/run_eval.py
 
 #### 평가 결과
 
-2026-09-18, 클러스터 UI 파드(`2b2-ceea5b7`, 전체 코퍼스, NVIDIA NIM 무료 티어)에서 `eval/run_eval.py` 실행.
+2026-09-18, 클러스터 UI 파드(전체 코퍼스, NVIDIA NIM 무료 티어)에서 `eval/run_eval.py` 실행.
+1차는 `2b2-f5ad77a`, 2차는 `2b2-ceea5b7` 이미지로 돌렸다.
 
 | 항목 | 1차 (튜닝 전) | 2차 (튜닝 후) | 기준 | 판정 |
 |---|---|---|---|---|
@@ -344,6 +350,10 @@ kubectl -n nhn-docs-bot exec <ui-pod> -- python -u eval/run_eval.py
 | 문서 밖 고정 문구 | 4/5 | 4/5 | 5/5 | 미달 |
 | 지연 중앙값 / 최대 | 22.2초 / 61.7초 | 11.3초 / 42.4초 | ≤ 15초 / ≤ 30초 | 중앙값 통과, 최대 미달 |
 | 예외 | 0 | 0 | 0 | 통과 |
+
+메뉴 경로 95% 는 보이는 것만큼 강한 수치가 아니다: `expect_menu` 는 서비스 이름이고 첫 줄은 이제
+문서 머리말(`서비스: 카테고리/서비스`)에서 만들어지므로, 사실상 올바른 문서를 찾았는지(검색 적중)를
+다시 재는 셈이다. 그보다 아래 단계의 탭·메뉴 경로가 맞는지는 채점하지 않는다.
 
 튜닝 1회(커밋 `ceea5b7`): 콘솔 답변 첫 줄을 문서 머리말의 카테고리/서비스로 만들고(`콘솔 > Network > DNS Plus`),
 이미지가 없는 후보에 같은 문서·같은 최상위 섹션의 이웃 청크 스크린샷을 최대 3장 빌려온다(`rag.enrich_images`).

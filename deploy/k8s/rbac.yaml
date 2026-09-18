@@ -13,6 +13,8 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
+    # ui Deployment 하나만 — 네임스페이스의 다른 Deployment 는 건드릴 수 없게 한다.
+    resourceNames: ["ui"]
     verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

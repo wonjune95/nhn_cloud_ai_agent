@@ -77,17 +77,34 @@ def existing_hash(cur, source_path: str) -> str | None:
     return row[0] if row else None
 
 
+# 안전밸브: 이 수를 넘고 전체의 절반을 넘게 지우려 하면 정리를 건너뛴다.
+PRUNE_MIN_ROWS = 10
+
+
 def prune_missing(conn, seen_paths: list[str]) -> int:
-    """디스크에 더 이상 없는 문서의 행을 지운다. 지운 문서 수를 돌려준다."""
+    """디스크에 더 이상 없는 문서의 행을 지운다. 지운 문서 수를 돌려준다.
+
+    크롤이 반만 끝났거나 문서 폴더가 잘못 마운트되면 멀쩡한 인덱스가 통째로 날아간다.
+    지울 문서가 전체의 절반을 넘으면(그리고 PRUNE_MIN_ROWS 보다 많으면) 사람이 볼 때까지 아무것도 지우지 않는다.
+    """
     cur = conn.cursor()
     try:
-        cur.execute("SELECT DISTINCT source_path FROM documents")
-        seen = set(seen_paths)
-        stale = [row[0] for row in cur.fetchall() if row[0] not in seen]
+        cur.execute(
+            "SELECT count(DISTINCT source_path) FROM documents WHERE source_path <> ALL(%s)",
+            (seen_paths,),
+        )
+        stale = cur.fetchone()[0]
+        cur.execute("SELECT count(DISTINCT source_path) FROM documents")
+        total = cur.fetchone()[0]
+
+        if stale > PRUNE_MIN_ROWS and stale * 2 > total:
+            print(f"[경고] 정리 대상 {stale}/{total} 문서 — 절반 초과라 건너뜀 (문서 폴더가 비었는지 확인)")
+            return 0
+
         if stale:
-            cur.execute("DELETE FROM documents WHERE source_path = ANY(%s)", (stale,))
+            cur.execute("DELETE FROM documents WHERE source_path <> ALL(%s)", (seen_paths,))
         conn.commit()
-        return len(stale)
+        return stale
     finally:
         cur.close()
 
@@ -195,16 +212,17 @@ def run(argv=None) -> int:
         total_chunks += count
         print(f"[{n}] {rel} → {count} chunks")
 
-    pruned = 0
-    if not args.limit:
-        pruned = prune_missing(conn, seen)
-
     cur.close()
-    conn.close()
 
+    # 0건 가드는 정리보다 먼저다 — 빈 폴더(크롤 실패, 잘못된 마운트)로 인덱스를 통째로 지우지 않는다.
     if not seen:
+        conn.close()
         print(f"처리할 문서가 없습니다: {docs_dir}")
         return 1
+
+    pruned = prune_missing(conn, seen) if not args.limit else 0
+
+    conn.close()
 
     print(f"완료: 문서 {done}개 적재, {skipped}개 건너뜀, {len(failed)}개 실패, {pruned}개 정리 (청크 {total_chunks}개)")
     for rel, err in failed:

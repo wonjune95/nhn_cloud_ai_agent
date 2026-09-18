@@ -1,5 +1,5 @@
 """평가 30문항 러너 (스펙 5-6). UI 파드 안에서 돌린다:
-    kubectl -n nhn-docs-bot cp eval/ <ui-pod>:/app/eval/ && kubectl -n nhn-docs-bot exec <ui-pod> -- python -u eval/run_eval.py
+    kubectl -n nhn-docs-bot cp eval <ui-pod>:/app/ && kubectl -n nhn-docs-bot exec <ui-pod> -- python -u eval/run_eval.py
 로컬:  cd app && DB_HOST=localhost python ../eval/run_eval.py --questions ../eval/questions.yaml
 
 rag 등을 찾는 위치는 배치 방식에 따라 다르다:
@@ -35,17 +35,19 @@ def run_one(rag, ar, item):
         service = rag.detect_service(q, rag.ALIASES)
         found = rag.hybrid_search(q, intent=intent, service=service)
         cands, grounded = rag.rerank_candidates(q, found, top_k=5)
-        cands = rag.enrich_images(cands, intent)
+        # 적중은 언제나 실제 검색 결과로 잰다 — 거부 답변이라고 후보를 지우면 검색 성능이 가려진다.
         cand_paths = [c.source_path for c in cands]
+        sources_shown = grounded is not False
         if grounded is False:
             answer, image_map = ar.NOT_GROUNDED_MESSAGE, {}
-            cand_paths = []
         else:
+            cands = rag.enrich_images(cands, intent)
             stream, image_map = rag.answer_stream(q, cands, intent=intent)
             answer = "".join(stream)
         first_line = answer.strip().splitlines()[0] if answer.strip() else ""
         valid = len(ar.valid_markers(answer, image_map))
-        return scoring.judge(item, cand_paths, first_line, valid, answer, time.time() - t0, None)
+        return scoring.judge(item, cand_paths, first_line, valid, answer, time.time() - t0, None,
+                             sources_shown=sources_shown)
     except Exception as e:
         return scoring.judge(item, [], "", 0, "", time.time() - t0, f"{type(e).__name__}: {str(e)[:60]}")
 

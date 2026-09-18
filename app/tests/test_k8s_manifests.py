@@ -30,6 +30,7 @@ def test_rbac_lets_refresh_restart_ui_only():
     assert docs["ServiceAccount"]["metadata"]["name"] == "refresh"
     rule = docs["Role"]["rules"][0]
     assert rule["apiGroups"] == ["apps"] and rule["resources"] == ["deployments"]
+    assert rule["resourceNames"] == ["ui"]   # ui 말고 다른 Deployment 는 못 건드린다
     assert sorted(rule["verbs"]) == ["get", "patch"]
     assert docs["RoleBinding"]["subjects"][0]["name"] == "refresh"
     assert docs["RoleBinding"]["roleRef"]["name"] == docs["Role"]["metadata"]["name"]
@@ -44,6 +45,8 @@ def test_cronjob_schedule_and_ordering():
     assert spec["successfulJobsHistoryLimit"] == 3 and spec["failedJobsHistoryLimit"] == 3
     job = spec["jobTemplate"]["spec"]
     assert job["backoffLimit"] == 0
+    # 크롤이 멈춰도 6시간이면 실패 처리 — Forbid 가 다음 달 실행을 막지 않게.
+    assert job["activeDeadlineSeconds"] == 21600
     pod = job["template"]["spec"]
     assert pod["enableServiceLinks"] is False
     assert pod["serviceAccountName"] == "refresh"
@@ -71,6 +74,8 @@ def test_cronjob_crawl_and_ingest_details():
     assert env["NVIDIA_API_KEY"]["valueFrom"]["secretKeyRef"] == {"name": "llm", "key": "NVIDIA_API_KEY"}
     restart = pod["containers"][0]
     assert "kubectl" in restart["image"]
+    # 공식 kubectl 이미지는 distroless 라 PATH 대신 절대 경로로 부른다.
+    assert restart["command"] == ["/bin/kubectl"]
     assert "rollout" in " ".join(restart.get("args") or restart.get("command"))
     assert pod["securityContext"]["runAsUser"] == 1000
     assert inits["fix-perms"]["securityContext"]["runAsUser"] == 0

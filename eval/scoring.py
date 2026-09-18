@@ -19,7 +19,10 @@ class Result:
     error: str | None
 
 
-def judge(item, cand_paths, first_line, valid_marker_count, answer, elapsed_s, error) -> Result:
+def judge(item, cand_paths, first_line, valid_marker_count, answer, elapsed_s, error,
+          sources_shown=True) -> Result:
+    # cand_paths 는 언제나 실제 검색 결과다(적중 채점용). 화면에 출처를 보였는지는
+    # sources_shown 으로 따로 받는다 — 거부 답변은 검색이 됐어도 출처를 보이지 않는다.
     kind = item["kind"]
     r = Result(id=item["id"], kind=kind, question=item["question"], hit5=None, menu_ok=None,
                shots_ok=None, outside_ok=None, elapsed_s=round(elapsed_s, 1), error=error)
@@ -34,7 +37,7 @@ def judge(item, cand_paths, first_line, valid_marker_count, answer, elapsed_s, e
         return r
 
     if kind == "outside":
-        r.outside_ok = answer.strip().startswith(NOT_GROUNDED_MESSAGE) and not cand_paths
+        r.outside_ok = answer.strip().startswith(NOT_GROUNDED_MESSAGE) and not sources_shown
         return r
 
     r.hit5 = item["expect_path"] in cand_paths[:5]
