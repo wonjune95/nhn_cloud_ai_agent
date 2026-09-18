@@ -42,14 +42,18 @@ def get_conn():
 
 def _has_column(cur, table: str, column: str) -> bool:
     cur.execute(
-        "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = %s AND column_name = %s AND table_schema = current_schema()",
         (table, column),
     )
     return cur.fetchone() is not None
 
 
 def _table_exists(cur, table: str) -> bool:
-    cur.execute("SELECT 1 FROM information_schema.tables WHERE table_name = %s", (table,))
+    cur.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = %s AND table_schema = current_schema()",
+        (table,),
+    )
     return cur.fetchone() is not None
 
 
@@ -181,12 +185,14 @@ def migrate(conn) -> None:
     컬럼이 실제로 없을 때만 ALTER 를 실행한다 (IF NOT EXISTS 는 이중 방어로 남겨 둔다).
     """
     cur = conn.cursor()
-    if _table_exists(cur, "questions"):
-        for col, typ in QUESTION_COLUMNS:
-            if not _has_column(cur, "questions", col):
-                cur.execute(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {col} {typ}")
-    if _table_exists(cur, "documents"):
-        if not _has_column(cur, "documents", "ingested_at"):
-            cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ DEFAULT now()")
-    conn.commit()
-    cur.close()
+    try:
+        if _table_exists(cur, "questions"):
+            for col, typ in QUESTION_COLUMNS:
+                if not _has_column(cur, "questions", col):
+                    cur.execute(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {col} {typ}")
+        if _table_exists(cur, "documents"):
+            if not _has_column(cur, "documents", "ingested_at"):
+                cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ DEFAULT now()")
+        conn.commit()
+    finally:
+        cur.close()

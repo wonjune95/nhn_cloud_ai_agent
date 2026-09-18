@@ -68,6 +68,9 @@ def number_images(cands: list[Candidate]) -> tuple[dict[int, ImageRef], list[lis
         for img in c.images or []:
             if img.get("missing"):
                 continue
+            if img["path"].startswith(("http://", "https://")):
+                # 원격 src(크롤러가 못 받아 그대로 남긴 외부 URL) — DOCS_DIR 로는 못 연다.
+                continue
             n = len(image_map) + 1
             image_map[n] = ImageRef(path=img["path"], caption=(img.get("caption") or "")[:CAPTION_CHARS])
             nums.append(n)
@@ -155,25 +158,30 @@ def combine_scores(vector_hits, bm25_hits, intent, service, keep=RERANK_KEEP):
 
 
 def hybrid_search(query, intent="general", service=None, top_k=CANDIDATES, keep=RERANK_KEEP):
-    conn = get_conn()
-    cur = conn.cursor()
-
+    # 임베딩 호출(NIM 왕복)을 먼저 끝내고 나서 커넥션을 연다 — 커넥션을 오래 쥐고
+    # 있지 않는다.
     q_vec = to_pgvector(embed_query(query))
-    cur.execute(f"""
-    SELECT {META_COLUMNS},
-           1 - ({vector_order_by(EMBED_DIM)}) AS similarity
-      FROM documents
-     ORDER BY {vector_order_by(EMBED_DIM)}
-     LIMIT %s;
-    """, (q_vec, q_vec, top_k))
 
-    vector_hits = []
-    for row in cur.fetchall():
-        cand = _meta_candidate(row)
-        vector_hits.append((cand, float(row[-1])))
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"""
+            SELECT {META_COLUMNS},
+                   1 - ({vector_order_by(EMBED_DIM)}) AS similarity
+              FROM documents
+             ORDER BY {vector_order_by(EMBED_DIM)}
+             LIMIT %s;
+            """, (q_vec, q_vec, top_k))
 
-    cur.close()
-    conn.close()
+            vector_hits = []
+            for row in cur.fetchall():
+                cand = _meta_candidate(row)
+                vector_hits.append((cand, float(row[-1])))
+        finally:
+            cur.close()
+    finally:
+        conn.close()
 
     scores = bm25.get_scores(tokenize(query))
     top_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
@@ -335,7 +343,7 @@ def format_history(history):
     return "이전 대화:\n" + "\n\n".join(lines) + "\n\n"
 
 
-def build_prompt(question, cands: list[Candidate], history=None, intent="general"):
+def build_prompt(question, cands: list[Candidate], history=None, intent="general"):  # intent 는 시그니처 대칭용 — 프롬프트 본문은 의도와 무관하고 시스템 프롬프트만 바뀐다.
     """(프롬프트, 그림 순번표). 블록 머리말에 서비스·문서명·섹션·출처를 나란히 적어
     본문 첫 줄의 '문서명 > 섹션 경로' 가 콘솔 메뉴 경로로 오해되지 않게 하고,
     블록 끝에 그 청크의 스크린샷을 '[그림 N] 캡션' 으로 붙인다 (스펙 3-1).

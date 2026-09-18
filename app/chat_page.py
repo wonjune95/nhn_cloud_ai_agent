@@ -9,6 +9,7 @@ import streamlit as st
 import answer_render as ar
 import db
 import qlog
+import schema_ready
 
 # 컨테이너에서는 /docs, 로컬에서는 저장소 루트의 nhn_cloud_docs.
 DOCS_DIR = os.getenv(
@@ -33,11 +34,7 @@ def load_index():
     """BM25 인덱스는 프로세스당 한 번. 같은 자리에서 2B 컬럼도 붙인다 (재적재 없이)."""
     import rag
 
-    conn = db.get_conn()
-    try:
-        db.migrate(conn)
-    finally:
-        conn.close()
+    schema_ready.ensure_schema()
     count = rag.build_bm25()
     return rag, count
 
@@ -59,16 +56,27 @@ def service_tag(service, intent):
 
 
 def render_answer(text, image_map):
-    """{{img:N}} 을 스크린샷으로 바꿔 그린다. 파일이 없으면 그 그림만 건너뛴다 (스펙 6절)."""
+    """{{img:N}} 을 스크린샷으로 바꿔 그린다. 파일이 없으면 그 그림만 건너뛴다 (스펙 6절).
+
+    part.path 는 문서 청크의 images 필드에서 온 값이라 신뢰하지 않는다 —
+    '../' 로 DOCS_DIR 밖을 가리키면 무시하고, st.image 실패도 그 그림만 건너뛴다.
+    """
+    docs_root = os.path.realpath(DOCS_DIR)
     for kind, part in ar.split_markers(text, image_map or {}):
         if kind == "text":
             st.markdown(part)
             continue
-        full = os.path.join(DOCS_DIR, part.path)
-        if os.path.isfile(full):
-            st.image(full, caption=part.caption or None)
-        else:
+        full = os.path.realpath(os.path.join(DOCS_DIR, part.path))
+        if not full.startswith(docs_root + os.sep):
+            print(f"  [스크린샷] 경로 밖: {full}", file=sys.stderr)
+            continue
+        if not os.path.isfile(full):
             print(f"  [스크린샷] 파일 없음: {full}", file=sys.stderr)
+            continue
+        try:
+            st.image(full, caption=part.caption or None)
+        except Exception as e:
+            print(f"  [스크린샷] 표시 실패: {full}: {e}", file=sys.stderr)
 
 
 def render_sources(cands):
@@ -98,6 +106,8 @@ def feedback_key(question_id):
 def feedback_buttons(question_id):
     """👍/👎. 누르면 바로 저장하고 자리에 결과 문구를 남긴다."""
     if question_id is None:
+        # 로그 저장(qlog.log_question)이 실패해 id 가 없으면 피드백을 걸 자리가 없다 (스펙 6절).
+        st.caption("저장 실패 — 피드백을 기록할 수 없습니다")
         return
     key = feedback_key(question_id)
     if key in st.session_state:
@@ -252,7 +262,9 @@ def answer_question(rag, question, chosen, top_k):
         except Exception as e:
             answer = "⚠️ 모델 서버가 일시적으로 혼잡해 답변을 만들지 못했습니다. 잠시 후 다시 질문해 주세요."
             failed, error_text = True, f"{type(e).__name__}: {e}"
-            cands, image_map = [], {}
+            # cands 는 검색이 성공했다는 뜻이니 로그(sources)를 위해 남긴다 — 화면에는
+            # render_sources 를 안 불러서 어차피 안 보인다.
+            image_map = {}
             if holder is not None:
                 holder.empty()  # 도중까지 흘러나온 본문이 오류 문구 위에 남지 않게 지운다.
             st.markdown(answer)

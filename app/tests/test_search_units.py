@@ -186,6 +186,19 @@ def test_number_images_empty_when_no_images():
     assert rag.number_images([c]) == ({}, [[]])
 
 
+def test_number_images_skips_remote_paths():
+    """크롤러가 못 받아 원격 URL 을 그대로 남긴 이미지는 missing 과 똑같이 건너뛴다."""
+    a = with_images("a", [
+        {"path": "http://example.com/a.png", "caption": "원격1", "alt": "", "missing": False},
+        {"path": "https://example.com/b.png", "caption": "원격2", "alt": "", "missing": False},
+        {"path": "p/local.png", "caption": "로컬", "alt": "", "missing": False},
+    ])
+    image_map, per_cand = rag.number_images([a])
+    assert list(image_map) == [1]
+    assert image_map[1].path == "p/local.png"
+    assert per_cand == [[1]]
+
+
 def test_build_prompt_lists_images_under_their_document_and_returns_map():
     a = with_images("a", [{"path": "p/a1.png", "caption": "첫 화면", "alt": "", "missing": False}])
     b = with_images("b", [

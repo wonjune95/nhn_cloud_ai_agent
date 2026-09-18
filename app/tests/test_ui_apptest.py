@@ -122,6 +122,38 @@ def test_markers_become_images(app, monkeypatch, tmp_path):
     assert all("{{img:" not in m.value for m in at.markdown)
 
 
+def test_traversal_image_path_is_skipped(app, monkeypatch, tmp_path):
+    """DOCS_DIR 밖을 가리키는 이미지 경로(../..)는 그 그림만 건너뛰고 트레이스백도 없다."""
+    import chat_page
+
+    png = tmp_path / "Network" / "VPC" / "images"
+    png.mkdir(parents=True)
+    (png / "a.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    monkeypatch.setattr(chat_page, "DOCS_DIR", str(tmp_path))
+
+    def stream(question, cands, history=None, intent="general"):
+        text = "콘솔 > Network > VPC\n1. 클릭 {{img:1}}\n2. 벗어남 {{img:2}}"
+        image_map = {
+            1: rag.ImageRef("Network/VPC/images/a.png", "캡"),
+            2: rag.ImageRef("../../etc/passwd", "탈출 시도"),
+        }
+        return iter([text]), image_map
+
+    monkeypatch.setattr(rag, "answer_stream", stream)
+
+    at, _calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+
+    assert len(at.image) == 1
+    assert all("{{img:" not in m.value for m in at.markdown)
+
+
 def test_answer_failure_is_shown_and_logged(app, monkeypatch):
     """모델 호출이 터져도 화면은 살아 있고, 오류가 로그에 남는다."""
     def boom(question, cands, history=None, intent="general"):
@@ -136,7 +168,11 @@ def test_answer_failure_is_shown_and_logged(app, monkeypatch):
     assert any("모델 서버가 일시적으로 혼잡해" in m.value for m in at.markdown)
     log = next(c for c in calls if c[0] == "log")[1]
     assert "503" in log["error"]
-    assert log["sources"] == []
+    # 검색은 성공했으니 cands 는 살려 두고 로그(sources)에 남긴다 — 화면에는 안 보인다 (render_sources 미호출).
+    assert log["sources"] == [{
+        "source_path": "Network/VPC/콘솔 사용 가이드.html", "section_path": "서브넷 생성",
+        "source_url": "https://x/", "service": "Network/VPC",
+    }]
 
 
 def test_reset_clears_feedback_state(app):
@@ -157,8 +193,10 @@ def test_reset_clears_feedback_state(app):
 def test_admin_page_renders_metrics_with_fake_stats(monkeypatch):
     import admin_stats as s
     import admin_page
+    import schema_ready
 
-    monkeypatch.setattr(admin_page, "get_conn", lambda: object())
+    monkeypatch.setattr(schema_ready, "ensure_schema", lambda: None)
+    monkeypatch.setattr(admin_page, "get_conn", lambda: types.SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(s, "summary", lambda conn, since: {
         "questions": 12, "sessions": 4, "median_s": 9.5, "max_s": 31.0,
         "error_rate": 0.25, "ungrounded_rate": 0.5, "up": 3, "down": 2})
@@ -174,3 +212,24 @@ def test_admin_page_renders_metrics_with_fake_stats(monkeypatch):
     assert any(m.value == "12" for m in at.metric)
     assert any("25%" in m.value for m in at.metric)
     assert any("Network/VPC" in str(d.value) for d in at.dataframe)
+
+
+def test_admin_page_shows_banner_when_schema_not_migrated(monkeypatch):
+    """2B 컬럼이 아직 없는 DB(UndefinedColumn)에서도 트레이스백 없이 배너만 뜬다."""
+    import admin_stats as s
+    import admin_page
+    import schema_ready
+
+    monkeypatch.setattr(schema_ready, "ensure_schema", lambda: None)
+    monkeypatch.setattr(admin_page, "get_conn", lambda: types.SimpleNamespace(close=lambda: None))
+
+    def boom(conn, since):
+        raise RuntimeError("UndefinedColumn")
+
+    monkeypatch.setattr(s, "summary", boom)
+
+    at = AppTest.from_string("import admin_page\nadmin_page.page()\n", default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert any("DB 에서 지표를 읽지 못했습니다" in e.value for e in at.error)
+    assert any("UndefinedColumn" in c.value for c in at.caption)

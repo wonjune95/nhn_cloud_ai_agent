@@ -81,7 +81,7 @@ DB_HOST=localhost python -m pytest -m integration app/tests/test_admin_stats_db.
 
 통합 테스트는 `.env` 의 `NVIDIA_API_KEY` 와, `docker compose up -d db` 로 띄운
 pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragdb_test` 데이터베이스를
-따로 만들어 쓴다(`app/tests/test_ingest_db.py` 의 `test_db` 픽스처가 없으면 만들고
+따로 만들어 쓴다(`app/tests/conftest.py` 의 `test_db` 픽스처가 없으면 만들고
 `db.DB_NAME` 을 그쪽으로 돌린다) — 통합 테스트를 실행해도 `ragdb` 의 실데이터는
 그대로 남는다. `app/tests/test_qlog_db.py`(질문 로그 기록·조회)와
 `app/tests/test_admin_stats_db.py`(관리자 지표 집계 SQL)도 같은 `test_db` 픽스처를

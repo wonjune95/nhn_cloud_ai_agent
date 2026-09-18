@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 import admin_stats as s
+import schema_ready
 from db import get_conn
 
 
@@ -20,25 +21,29 @@ def page():
     period = st.radio("기간", s.PERIODS, horizontal=True, index=1)
     since = s.since_for(period)
 
+    # 스키마 보장(get_conn 포함) 부터 지표 집계 SQL 여섯 건까지 한 try 로 묶는다 —
+    # 마이그레이션 전 DB(2B 컬럼 없음)에서 s.* 호출이 UndefinedColumn 으로 터져도
+    # 트레이스백 대신 배너로 보여준다.
+    conn = None
     try:
+        schema_ready.ensure_schema()
         conn = get_conn()
-    except Exception as e:
-        st.error("DB 에 연결하지 못했습니다.")
-        st.caption(f"{type(e).__name__}: {e}")
-        return
-
-    try:
         summary = s.summary(conn, since)
         services = s.by_service(conn, since)
         down = s.recent_down(conn, since)
         ungrounded = s.recent_ungrounded(conn, since)
         slow = s.recent_slow(conn, since)
         index = s.index_status(conn)
+    except Exception as e:
+        st.error("DB 에서 지표를 읽지 못했습니다.")
+        st.caption(f"{type(e).__name__}: {e}")
+        return
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     c = st.columns(4)
     c[0].metric("질문 수", f"{summary['questions']}")
