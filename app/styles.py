@@ -130,6 +130,11 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
   font-size: 0.68rem; font-weight: 600;
   background: var(--nhn-blue-700); color: #fff; border-radius: var(--nhn-radius-8);
 }
+.nhn-answer-tag { margin: 0 0 0.5rem 0; }
+.nhn-source-row { margin-bottom: 0.6rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; }
+.nhn-source-chip a { color: inherit; text-decoration: none; }
+.nhn-source-chip a:hover { text-decoration: underline; }
+.nhn-section { font-size: 0.72rem; color: var(--nhn-gray-700); margin-left: 0.3rem; }
 
 /* ---------- 입력창 ---------- */
 [data-testid="stChatInput"] {
