@@ -160,3 +160,25 @@ def init_schema(conn, dim: int, rebuild: bool = False) -> None:
 
     conn.commit()
     cur.close()
+
+    migrate(conn)
+
+
+# 2단계-B 에서 늘어난 컬럼. 재적재 없이 UI 기동 때 붙인다 (스펙 4-2).
+QUESTION_COLUMNS = (
+    ("session_id", "TEXT"),        # 브라우저 세션당 랜덤 UUID — 신원이 아니라 사용자 수 추정용
+    ("answer", "TEXT"),            # 👎 검토용 답변 전문
+    ("retrieval_query", "TEXT"),   # 대화 맥락을 합친 검색 질의
+)
+
+
+def migrate(conn) -> None:
+    """questions·documents 에 2B 컬럼을 멱등하게 추가한다. 테이블이 없으면 아무것도 하지 않는다."""
+    cur = conn.cursor()
+    if _table_exists(cur, "questions"):
+        for col, typ in QUESTION_COLUMNS:
+            cur.execute(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {col} {typ}")
+    if _table_exists(cur, "documents"):
+        cur.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMPTZ DEFAULT now()")
+    conn.commit()
+    cur.close()
