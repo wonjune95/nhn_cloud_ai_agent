@@ -367,3 +367,8 @@ def test_answer_stream_returns_stream_and_map(monkeypatch):
 def test_string_compat_paths_are_gone():
     for name in ("rerank", "_candidate", "_as_candidate", "get_meta", "doc_meta"):
         assert not hasattr(rag, name), name
+
+
+def test_both_prompts_ask_for_citations():
+    for p in (rag.SYSTEM_PROMPT, rag.CONSOLE_SYSTEM_PROMPT):
+        assert "[1] 처럼 적어라" in p and "[1][3]" in p

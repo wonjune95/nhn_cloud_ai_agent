@@ -354,3 +354,31 @@ def test_admin_page_requires_token_when_admin_token_is_set(monkeypatch):
     assert not at.exception
     at.run()
     assert any(m.value == "12" for m in at.metric)
+
+
+def test_source_card_html_numbers_and_links():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path="Network/DNS Plus/콘솔 사용 가이드.html", service="Network/DNS Plus",
+                  doc_type="console", score=1.0, section_path="레코드 세트 관리 > 레코드 세트 생성",
+                  source_url="https://docs.nhncloud.com/ko/x/")
+    html = chat_page.source_card_html(2, c)
+    assert "[2]" in html and "콘솔 사용 가이드" in html and "Network/DNS Plus" in html
+    assert "레코드 세트 관리 › 레코드 세트 생성" in html
+    assert 'href="https://docs.nhncloud.com/ko/x/"' in html and "원문" in html
+
+
+def test_source_card_without_url_has_no_link():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path="A/B/C.html", service="A/B", doc_type="other", score=0.0)
+    html = chat_page.source_card_html(1, c)
+    assert "href=" not in html and "[1]" in html
+
+
+def test_sources_render_as_cards_not_expander(app):
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not any("참고한 문서" in e.label for e in at.expander)
+    assert any("[1]" in m.value and "nhn-cite-card" in m.value for m in at.markdown)

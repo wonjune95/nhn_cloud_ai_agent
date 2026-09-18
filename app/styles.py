@@ -135,6 +135,10 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
 .nhn-source-chip a { color: inherit; text-decoration: none; }
 .nhn-source-chip a:hover { text-decoration: underline; }
 .nhn-section { font-size: 0.72rem; color: var(--nhn-gray-700); margin-left: 0.3rem; }
+.nhn-cite-card { font-size: 0.8rem; padding: 0.3rem 0.5rem; margin-top: 0.25rem; border-left: 3px solid var(--nhn-blue-200); background: var(--nhn-blue-100); border-radius: 0 var(--nhn-radius-8) var(--nhn-radius-8) 0; }
+.nhn-cite-no { color: var(--nhn-blue-800); font-weight: 700; margin-right: 0.2rem; }
+.nhn-cite-card a { color: var(--nhn-blue-800); text-decoration: none; margin-left: 0.3rem; }
+.nhn-cite-card a:hover { text-decoration: underline; }
 
 /* ---------- 입력창 ---------- */
 [data-testid="stChatInput"] {
