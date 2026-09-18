@@ -2,6 +2,7 @@
 #   kubectl -n nhn-docs-bot delete job ingest --ignore-not-found
 #   kubectl -n nhn-docs-bot apply -f ingest-job.yaml
 # 증분 적재가 기본이다. 스키마가 바뀌었으면 args 에 "--rebuild" 를 넣는다.
+# 컨테이너는 uid 1000(app) 으로 뜬다. docs PVC 의 파일은 refresh CronJob 이 같은 uid 로 쓴다.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -14,6 +15,11 @@ spec:
       restartPolicy: OnFailure
       # Service 'db' 때문에 DB_PORT=tcp://… 가 자동 주입되어 앱의 DB_PORT 와 충돌한다.
       enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       imagePullSecrets:
         - name: regcred
       containers:

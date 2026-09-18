@@ -12,6 +12,7 @@
 # 그대로 쓰므로, 시크릿만 바꾸면 안 되고 DB 안에서 ALTER ROLE 도 함께 해야 한다.
 #
 # 이미지 태그는 배포 시 `kubectl set image` 또는 sed 로 바꾼다.
+# 컨테이너는 uid 1000(app) 으로 뜬다. docs PVC 의 파일은 refresh CronJob 이 같은 uid 로 쓴다.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -145,6 +146,11 @@ spec:
     spec:
       # Service 'db' 때문에 DB_PORT=tcp://… 가 자동 주입되어 앱의 DB_PORT 와 충돌한다.
       enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       imagePullSecrets:
         - name: regcred
       containers:
