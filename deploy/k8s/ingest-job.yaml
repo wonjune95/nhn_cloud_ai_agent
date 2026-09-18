@@ -24,12 +24,18 @@ spec:
           env:
             - { name: DB_HOST, value: db }
             - { name: DB_PORT, value: "5432" }
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: db, key: POSTGRES_USER }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db, key: POSTGRES_PASSWORD }
             - name: NVIDIA_API_KEY
               valueFrom:
                 secretKeyRef: { name: llm, key: NVIDIA_API_KEY }
           resources:
             requests: { cpu: 250m, memory: 512Mi }
-            limits: { memory: 2Gi }
+            limits: { cpu: "1", memory: 2Gi }
           volumeMounts:
             - name: docs
               mountPath: /docs

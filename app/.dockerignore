@@ -3,3 +3,5 @@ __pycache__/
 data/
 tests/
 .pytest_cache/
+.env
+test.py

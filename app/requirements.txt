@@ -1,9 +1,9 @@
-streamlit
-langchain
-langchain-community
-openai
-psycopg2-binary
-beautifulsoup4
-tiktoken
-rank_bm25
-pyyaml
+# 현재 설치돼 검증된 버전으로 고정한다 (pip freeze, 2026-09-18).
+# langchain / langchain-community / tiktoken 은 쓰지 않으므로 뺐다
+# (rag.py 의 langchain_search·ask_langchain 죽은 경로와 함께 제거).
+streamlit==1.64.0
+openai==3.14.1
+psycopg2-binary==2.9.13
+beautifulsoup4==4.15.0
+rank-bm25==0.2.2
+PyYAML==6.0.3

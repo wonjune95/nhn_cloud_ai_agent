@@ -17,7 +17,7 @@ Streamlit UI에서 질문에 대해 근거 문서를 찾아 답하는 RAG 챗봇
 ```
 pip install -r requirements-dev.txt        # pytest
 pip install -r crawlling/requirements.txt  # selenium, bs4, requests 등
-pip install -r app/requirements.txt        # streamlit, langchain, psycopg2 등
+pip install -r app/requirements.txt        # streamlit, openai, psycopg2 등 (버전 고정)
 ```
 
 ## .env
@@ -26,9 +26,13 @@ pip install -r app/requirements.txt        # streamlit, langchain, psycopg2 등
 
 ```
 NVIDIA_API_KEY=
+NVIDIA_BASE_URL=            # 비우면 https://integrate.api.nvidia.com/v1
 NVIDIA_LLM_MODEL=
 NVIDIA_EMBEDDING_MODEL=
 ```
+
+`app/llm.py` 는 키 없이도 import 된다(테스트가 이 모듈을 거쳐 들어온다). 키 확인은
+`chat`/`chat_stream`/`embed` 를 실제로 부를 때 한다.
 
 ## 파이프라인 실행 순서
 
@@ -83,7 +87,8 @@ pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragd
 
 측정일 2026-09-17, 전체 재수집 기준(`nhn_cloud_docs/`).
 
-- 문서 850개, 29개 카테고리 폴더
+- 문서 850개, 29개 카테고리 폴더. 크롤러의 GNB 탐색이 찾아낸 문서 링크가 전부
+  850개다 — 계획서의 "1,000쪽 이상"은 추정치였고, 850이 실제 전수다(누락이 아니다).
 - manifest 상태: `ok` 724 / `no_breadcrumb` 126 / `error` 0
 - `콘솔 사용 가이드` 문서 104개 (1단계 36개 → 크게 증가)
 - 이미지 2,574장, 전체 용량 535MB
@@ -103,6 +108,16 @@ pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragd
 (`(embedding::halfvec(2048)) halfvec_cosine_ops`). 별칭 사전은 158개 서비스 /
 566개 별칭으로 재생성됐다(`app/services.generated.yaml`, `python aliases.py`).
 
+25,757개 청크 중 본문이 서로 다른 것은 24,675개다 — 문서가 다른데 본문이 똑같은
+청크가 1,051개 그룹(전체의 4.2%)이나 된다(공통 안내 문단, 같은 서비스의 v2/v3 API
+가이드 등). 그래서 검색 결과의 출처·서비스는 본문을 키로 한 사전이 아니라 후보
+객체(`rag.Candidate`)가 직접 들고 다닌다. 본문을 키로 쓰면 같은 본문을 가진 마지막
+문서가 출처와 서비스 부스트를 가로챈다.
+
+청킹 로직이나 프롬프트에 넣는 청크 형식(`app/chunker.py`)이 바뀌면
+`python ingest.py --rebuild` 로 전부 다시 적재해야 한다. 증분 적재는 **HTML 해시만**
+비교하므로, HTML 이 그대로면 청킹이 바뀌어도 건너뛴다.
+
 ## 검색 동작
 
 1. **의도 판정** (`app/intent.py`): `console | general`, LLM 없이 규칙으로 정한다.
@@ -120,7 +135,9 @@ pgvector 가 필요하다. 실데이터 DB(`ragdb`)를 지우지 않도록 `ragd
 3. **하이브리드 검색** (`app/rag.py`): 벡터 20건 + 한글 2-gram BM25(`tokenize_ko.py`)
    20건을 후보로 가져와 `combine_scores` 로 점수를 보정한다 — 벡터·BM25 둘 다 등장
    ×1.2, 콘솔 의도이고 `doc_type == console` ×1.5, 서비스 일치 ×1.3 — 상위 12건을
-   남긴다.
+   남긴다. BM25 인덱스는 프로세스당 한 번 메모리에 만든다: 2-gram 토큰 273만 개,
+   약 130MB, 질의당 30~80ms. 검색 단계에 걸리는 2.1초는 BM25 가 아니라 질의 임베딩
+   왕복(NIM 호출 1회)이 대부분이다.
 4. **리랭킹**: 추론(thinking)을 끈 LLM 호출 한 번으로 12건을 한꺼번에 채점한다
    (문서당 900자, 0~10 점수와 "이 문서만으로 답 가능한가"(1/0) 근거 판정을 함께
    받는다). 점수 상위 5건(`TOP_K`)만 답변 프롬프트에 넣는다.
@@ -156,8 +173,12 @@ UI pod 안(NVIDIA NIM 무료 티어, 리랭킹은 추론 끔)에서 측정한 �
 - `deploy/k8s/nhn-docs-bot.yaml`: `nhn-docs-bot` 네임스페이스에 pgvector
   StatefulSet(+ NFS PVC), 문서용 PVC, UI Deployment/Service 를 정의한다.
 - `deploy/k8s/ingest-job.yaml`: 전체 재적재를 Kubernetes Job 으로 실행한다.
-- 시크릿 `llm`(`NVIDIA_API_KEY`)과 `regcred`(이미지 레지스트리 인증)는 매니페스트
-  밖에서 미리 만들어 둔다.
+- 시크릿 세 개는 매니페스트 밖에서 미리 만들어 둔다(git 에 넣지 않는다):
+  `db`(`POSTGRES_USER`/`POSTGRES_PASSWORD` — pgvector 와 앱이 함께 쓴다),
+  `llm`(`NVIDIA_API_KEY`), `regcred`(이미지 레지스트리 인증).
+- `pgdata` PVC 는 NFS(`sc-nas-cicd`) 위에 있다. NFS 위의 Postgres 는 잠금·fsync
+  의미 차이로 알려진 위험이 있어, 블록 StorageClass 가 생기면 옮겨야 한다.
+  지금은 코퍼스 재적재로 복구할 수 있어 감수한 선택이다(매니페스트에 주석).
 - UI Deployment 는 `enableServiceLinks: false` 를 준다 — 이름이 `db` 인 Service 가
   있으면 쿠버네티스가 `DB_PORT=tcp://…` 환경변수를 자동 주입해 앱이 쓰는 `DB_PORT`
   와 충돌하기 때문이다.
@@ -165,3 +186,53 @@ UI pod 안(NVIDIA NIM 무료 티어, 리랭킹은 추론 끔)에서 측정한 �
   ```
   ssh POC-BASTION -L 8501:127.0.0.1:18501 "kubectl -n nhn-docs-bot port-forward svc/ui 18501:8501"
   ```
+
+### 운영 런북
+
+**시크릿 만들기** (네임스페이스를 만든 직후 한 번):
+
+```
+kubectl -n nhn-docs-bot create secret generic db \
+    --from-literal=POSTGRES_USER=devops \
+    --from-literal=POSTGRES_PASSWORD='<강한 비밀번호>'
+kubectl -n nhn-docs-bot create secret generic llm --from-literal=NVIDIA_API_KEY=...
+kubectl -n nhn-docs-bot create secret docker-registry regcred \
+    --docker-server=harbor.114-110-181-178.nip.io --docker-username=... --docker-password=...
+```
+
+`db` 시크릿은 pgvector(`POSTGRES_USER`/`POSTGRES_PASSWORD`)와 앱
+(`DB_USER`/`DB_PASSWORD`)이 같은 값을 공유한다. 비밀번호를 나중에 바꾸려면 시크릿만
+고쳐서는 안 되고 DB 안에서 `ALTER ROLE` 도 함께 해야 한다 — pgvector 는 이미
+초기화된 `PGDATA` 의 계정을 그대로 쓰기 때문이다.
+
+**문서 코퍼스(`docs` PVC) 채우기.** 크롤러는 클러스터 안에서 돌리지 않는다. 윈도우에서
+받은 `nhn_cloud_docs/` 를 헬퍼 파드를 통해 밀어 넣는다:
+
+```
+kubectl -n nhn-docs-bot run docs-helper --image=busybox --restart=Never \
+    --overrides='{"spec":{"containers":[{"name":"docs-helper","image":"busybox","command":["sleep","3600"],
+    "volumeMounts":[{"name":"docs","mountPath":"/docs"}]}],
+    "volumes":[{"name":"docs","persistentVolumeClaim":{"claimName":"docs"}}]}}'
+kubectl -n nhn-docs-bot wait --for=condition=Ready pod/docs-helper
+
+tar -C nhn_cloud_docs -cf - . | kubectl -n nhn-docs-bot exec -i docs-helper -- tar -C /docs -xf -
+
+kubectl -n nhn-docs-bot exec docs-helper -- sh -c 'ls /docs | head; ls /docs/manifest.json'
+kubectl -n nhn-docs-bot delete pod docs-helper
+```
+
+**적재와 반영.** 적재 Job 을 돌린 뒤 UI 를 다시 띄워야 한다 — UI 는 BM25 인덱스를
+프로세스 시작 때 한 번만 만들기 때문에, 재시작 없이는 새 문서가 검색되지 않는다:
+
+```
+kubectl -n nhn-docs-bot delete job ingest --ignore-not-found
+kubectl -n nhn-docs-bot apply -f deploy/k8s/ingest-job.yaml
+kubectl -n nhn-docs-bot logs -f job/ingest
+
+kubectl -n nhn-docs-bot rollout restart deploy/ui
+kubectl -n nhn-docs-bot rollout status deploy/ui
+```
+
+청킹 로직이나 프롬프트 형식이 바뀌었으면 Job 의 `args` 에 `"--rebuild"` 를 넣는다
+(증분 적재는 HTML 해시만 본다). UI Deployment 는 `strategy: Recreate` 라 옛 파드가
+먼저 내려간 뒤 새 파드가 올라온다(인덱싱이 겹치지 않게).
