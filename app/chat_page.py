@@ -1,4 +1,5 @@
 """챗 화면 (스펙 3·4-1). ui.py 의 st.navigation 이 page() 를 부른다."""
+import html
 import os
 import sys
 import time
@@ -49,7 +50,7 @@ def user_bubble(text):
 
 def service_tag(service, intent):
     st.markdown(
-        f'<div class="nhn-answer-tag"><span class="nhn-service-tag">{service or "서비스 미상"}</span>'
+        f'<div class="nhn-answer-tag"><span class="nhn-service-tag">{html.escape(service or "서비스 미상", quote=True)}</span>'
         f'<span class="nhn-source-chip">{INTENT_LABEL.get(intent, intent)}</span></div>',
         unsafe_allow_html=True,
     )
@@ -80,13 +81,18 @@ def render_answer(text, image_map):
 
 
 def source_card_html(i: int, c) -> str:
-    """출처 카드 한 줄. 값은 전부 코퍼스에서 온 것(서비스·문서명·섹션·URL)이라 HTML 로 그린다."""
-    name = os.path.splitext(os.path.basename(c.source_path))[0]
-    section = (c.section_path or "").replace(" > ", " › ")
-    link = f' <a href="{c.source_url}" target="_blank">원문 ↗</a>' if c.source_url else ""
+    """출처 카드 한 줄. 값은 전부 코퍼스에서 온 것(서비스·문서명·섹션·URL)이지만 크롤링 원본이라
+    믿지 않고 HTML 로 그리기 전에 이스케이프한다."""
+    name = html.escape(os.path.splitext(os.path.basename(c.source_path))[0], quote=True)
+    section = html.escape((c.section_path or "").replace(" > ", " › "), quote=True)
+    service = html.escape(c.service, quote=True)
+    link = (
+        f' <a href="{html.escape(c.source_url, quote=True)}" target="_blank">원문 ↗</a>'
+        if c.source_url else ""
+    )
     return (
         f'<div class="nhn-cite-card"><span class="nhn-cite-no">[{i}]</span> '
-        f'<b>{name}</b> <span class="nhn-service-tag">{c.service}</span> '
+        f'<b>{name}</b> <span class="nhn-service-tag">{service}</span> '
         f'<span class="nhn-section">› {section}</span>{link}</div>'
     )
 

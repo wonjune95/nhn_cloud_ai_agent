@@ -382,3 +382,14 @@ def test_sources_render_as_cards_not_expander(app):
     at.chat_input[0].set_value("서브넷 만드는 법").run()
     assert not any("참고한 문서" in e.label for e in at.expander)
     assert any("[1]" in m.value and "nhn-cite-card" in m.value for m in at.markdown)
+
+
+def test_source_card_html_escapes_corpus_values():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path='a<b>"c.html', service="A/B", doc_type="other", score=0.0,
+                  section_path="x > <script>", source_url='https://x/?a="b"')
+    html_out = chat_page.source_card_html(1, c)
+    assert "<script>" not in html_out
+    assert "&quot;" in html_out
+    assert "[1]" in html_out
