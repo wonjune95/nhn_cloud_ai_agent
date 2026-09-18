@@ -44,10 +44,20 @@ IMAGE_TIMEOUT = 10
 
 
 def build_driver() -> webdriver.Chrome:
+    """headless Chrome. 컨테이너에서는 CHROME_BIN/CHROMEDRIVER 가 가리키는 바이너리를,
+    로컬에서는 webdriver-manager 가 받은 드라이버를 쓴다 (둘 다 있을 때만 컨테이너 모드)."""
     opts = Options()
     for flag in ("--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"):
         opts.add_argument(flag)
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
+
+    chrome_bin = os.getenv("CHROME_BIN")
+    chromedriver = os.getenv("CHROMEDRIVER")
+    if chrome_bin and chromedriver:
+        opts.binary_location = chrome_bin
+        service = Service(chromedriver)
+    else:
+        service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=opts)
 
 
 def discover(driver) -> list[dict]:
