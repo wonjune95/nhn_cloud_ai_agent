@@ -81,3 +81,36 @@ def test_load_aliases_skips_non_list_values(tmp_path):
     bad.write_text("Network/VPC: VPC\nNetwork/LB:\n- LB\n", encoding="utf-8")
     aliases = load_aliases(str(bad), str(tmp_path / "none.yaml"))
     assert aliases == {"lb": "Network/LB"}
+
+
+# ---- 실제 사전(services.generated.yaml + services.yaml) 으로 확인하는 회귀 테스트 ----
+# 문서 제목이 '콘솔 사용 가이드' 류의 일반 명칭이라 제목 기반 별칭이 불가능하다.
+# 한글 질문이 서비스로 이어지는지는 수동 사전(services.yaml)에 달려 있다.
+
+@pytest.mark.parametrize("q,expected", [
+    ("오브젝트 스토리지에 파일 업로드", "Storage/Object Storage"),
+    ("전자세금계산서는 콘솔 어디서 확인해?", "Bill/eTax"),
+    ("인스턴스를 생성하는 절차", "Compute/Instance"),
+])
+def test_default_aliases_resolve_korean_questions(q, expected):
+    assert detect_service(q, load_aliases()) == expected
+
+
+def test_manual_alias_keys_match_real_service_folders():
+    """services.yaml 의 키는 '카테고리/서비스' 폴더명과 정확히 같아야 한다."""
+    import os
+
+    import yaml
+
+    from intent import MANUAL_ALIASES
+
+    docs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "nhn_cloud_docs")
+    if not os.path.isdir(docs_dir):
+        pytest.skip("nhn_cloud_docs 코퍼스가 없습니다")
+
+    with open(MANUAL_ALIASES, encoding="utf-8") as f:
+        mapping = yaml.safe_load(f) or {}
+
+    missing = [k for k in mapping if not os.path.isdir(os.path.join(docs_dir, *k.split("/")))]
+    assert missing == []

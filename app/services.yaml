@@ -34,3 +34,82 @@ Network/DNS Plus:
 Network/Network ACL:
   - 네트워크 ACL
   - ACL
+
+# --- 콘솔 가이드 주요 서비스 한글 별칭 (2026-09-18 추가) ---
+# 문서 제목은 '콘솔 사용 가이드'·'API 가이드'처럼 서비스와 무관한 일반 명칭이라
+# 제목에서 별칭을 뽑을 수 없다. 그래서 여기에 손으로 적는다.
+# 키는 nhn_cloud_docs/ 아래 실제 폴더명(카테고리/서비스)과 정확히 같아야 한다.
+Compute/Instance:
+  - 인스턴스
+  - 가상 서버
+Compute/Image:
+  - 이미지
+Compute/Auto Scale:
+  - 오토스케일
+  - 오토 스케일
+  - 오토스케일링
+Storage/Object Storage:
+  - 오브젝트 스토리지
+  - 오브젝트스토리지
+Storage/Block Storage:
+  - 블록 스토리지
+  - 블록스토리지
+  - 볼륨
+Storage/NAS:
+  - 나스
+Storage/Backup:
+  - 백업
+Database/RDS for MySQL:
+  - RDS
+  - 마이에스큐엘
+  - 마이SQL
+Database/RDS for MariaDB:
+  - 마리아디비
+  - 마리아DB
+Database/RDS for MS-SQL:
+  - MSSQL
+  - 엠에스에스큐엘
+Container/NHN Kubernetes Service(NKS):
+  - NKS
+  - 쿠버네티스
+  - 엔케이에스
+Container/NHN Container Registry(NCR):
+  - NCR
+  - 컨테이너 레지스트리
+  - 컨테이너레지스트리
+Security/Secure Key Manager:
+  - SKM
+  - 시크릿 키 매니저
+  - 시큐어 키 매니저
+Security/Network-Firewall:
+  - 방화벽
+  - 네트워크 방화벽
+Security/Cloud Access:
+  - 클라우드 액세스
+Management/Certificate Manager:
+  - 인증서
+  - 인증서 매니저
+Notification/SMS:
+  - 문자
+  - 문자 발송
+  - 문자메시지
+  - 문자 메시지
+Notification/Email:
+  - 이메일
+Notification/Push:
+  - 푸시
+  - 푸시 알림
+Notification/KakaoTalk Bizmessage:
+  - 알림톡
+  - 카카오톡
+  - 친구톡
+Data & Analytics/Log & Crash Search:
+  - 로그
+  - 로그 검색
+  - 로그앤크래시
+Bill/eTax:
+  - 전자세금계산서
+  - 세금계산서
+Content Delivery/CDN:
+  - CDN
+  - 씨디엔

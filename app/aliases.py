@@ -49,6 +49,12 @@ def main(argv=None) -> int:
     mapping = generate(conn)
     conn.close()
 
+    # 적재 전이거나 적재가 실패한 DB 로 실행하면 사전이 통째로 비워진다.
+    # 기존 파일을 지우지 않고 그대로 둔다 (Dockerfile 이 기동 때마다 이걸 부른다).
+    if not mapping:
+        print("documents 가 비어 있어 별칭 사전을 갱신하지 않습니다")
+        return 0
+
     with open(args.out, "w", encoding="utf-8") as f:
         yaml.safe_dump(mapping, f, allow_unicode=True, sort_keys=True)
 
