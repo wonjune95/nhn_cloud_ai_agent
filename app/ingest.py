@@ -130,6 +130,7 @@ def ingest_document(conn, docs_dir: str, rel_path: str, url: str | None, has_bre
 
 
 def run(argv=None) -> int:
+    # 종료 코드: 0 = 완료(일부 문서 실패 포함), 1 = 폴더/manifest 없음, DB 연결 실패, 임베딩 API 실패, 처리 대상 0건
     args = parse_args(argv)
     docs_dir = os.path.abspath(args.docs_dir)
     if not os.path.isdir(docs_dir):
@@ -147,9 +148,19 @@ def run(argv=None) -> int:
     from llm import EMBEDDING_MODEL_NAME, embed_one
 
     manifest = load_manifest(docs_dir)
-    conn = get_conn()
 
-    dim = len(embed_one("test"))
+    # 연결·인증 실패는 문서 실패와 다르다 — Job 이 Failed 로 남아야 사람이 본다 (스펙 5-3).
+    try:
+        conn = get_conn()
+    except Exception as e:
+        print(f"DB 연결 실패: {type(e).__name__}: {e}")
+        return 1
+    try:
+        dim = len(embed_one("test"))
+    except Exception as e:
+        print(f"임베딩 API 실패: {type(e).__name__}: {e}")
+        conn.close()
+        return 1
     print(f"임베딩 모델: {EMBEDDING_MODEL_NAME} (dim={dim}) / 문서 폴더: {docs_dir}")
     init_schema(conn, dim, rebuild=args.rebuild)
 
@@ -191,10 +202,15 @@ def run(argv=None) -> int:
     cur.close()
     conn.close()
 
+    if not seen:
+        print(f"처리할 문서가 없습니다: {docs_dir}")
+        return 1
+
     print(f"완료: 문서 {done}개 적재, {skipped}개 건너뜀, {len(failed)}개 실패, {pruned}개 정리 (청크 {total_chunks}개)")
     for rel, err in failed:
         print(f"  - {rel}: {err}")
-    return 1 if failed else 0
+    # 일부 문서 실패는 경고로 둔다. 다음 실행이 미적재 문서만 다시 처리한다 (스펙 5-3).
+    return 0
 
 
 def parse_args(argv=None):
