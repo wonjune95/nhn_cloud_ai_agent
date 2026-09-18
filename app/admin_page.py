@@ -80,7 +80,10 @@ def page():
         df = pd.DataFrame(daily, columns=["일자", "질문 수", "응답 중앙값(초)", "👎"]).set_index("일자")
         st.bar_chart(df[["질문 수"]], height=220)
         st.bar_chart(df[["응답 중앙값(초)"]], height=220)
-        st.bar_chart(df[["👎"]], height=220)
+        if int(df["👎"].sum()) == 0:
+            st.caption("기간 안에 👎 가 없습니다")
+        else:
+            st.bar_chart(df[["👎"]].astype(int), height=220)
 
     st.subheader("서비스별")
     st.dataframe(pd.DataFrame(services, columns=["서비스", "질문 수", "👎", "미확인"]),
