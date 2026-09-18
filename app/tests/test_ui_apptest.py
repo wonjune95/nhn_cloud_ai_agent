@@ -393,3 +393,20 @@ def test_source_card_html_escapes_corpus_values():
     assert "<script>" not in html_out
     assert "&quot;" in html_out
     assert "[1]" in html_out
+
+
+def test_status_shows_candidate_chips(app):
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    status_texts = [m.value for m in at.markdown if "nhn-progress-chip" in m.value]
+    assert status_texts, "status 안에 후보 칩이 없다"
+    assert any("콘솔 사용 가이드" in t and "서브넷 생성" in t for t in status_texts)
+
+
+def test_candidate_chip_text():
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="", source_path="Network/VPC/콘솔 사용 가이드.html", service="Network/VPC",
+                  doc_type="console", score=0.0, section_path="서브넷 > 서브넷 생성")
+    assert chat_page.candidate_chip(c) == "Network/VPC · 콘솔 사용 가이드 › 서브넷 › 서브넷 생성"

@@ -56,6 +56,25 @@ def service_tag(service, intent):
     )
 
 
+def candidate_chip(c) -> str:
+    name = os.path.splitext(os.path.basename(c.source_path))[0]
+    section = (c.section_path or "").replace(" > ", " › ")
+    return f"{c.service} · {name}" + (f" › {section}" if section else "")
+
+
+def render_progress_chips(slot, cands, limit=5):
+    """status 안의 자리(slot)에 후보 문서를 한 줄씩 그린다. 리랭킹 뒤 같은 자리를 다시 그린다.
+
+    후보 문서 값은 코퍼스에서 온 것이라 HTML 로 그리기 전에 이스케이프한다(2A 패턴과 동일)."""
+    slot.markdown(
+        "".join(
+            f'<div class="nhn-progress-chip">{html.escape(candidate_chip(c), quote=True)}</div>'
+            for c in cands[:limit]
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def render_answer(text, image_map):
     """{{img:N}} 을 스크린샷으로 바꿔 그린다. 파일이 없으면 그 그림만 건너뛴다 (스펙 6절).
 
@@ -236,7 +255,7 @@ def answer_question(rag, question, chosen, top_k):
 
     with st.chat_message("assistant", avatar="☁️"):
         try:
-            with st.status("문서를 검색하고 있습니다…", expanded=False) as status:
+            with st.status("검색 중…", expanded=False) as status:
                 search_q = rag.retrieval_query(question, history)
                 intent = rag.detect_intent(question)
                 if chosen != AUTO:
@@ -246,12 +265,14 @@ def answer_question(rag, question, chosen, top_k):
                 else:
                     service = rag.detect_service(search_q, rag.ALIASES, fallback=st.session_state.get("last_service"))
                     st.session_state.last_service = service
-                status.update(
-                    label=f"1/3 하이브리드 검색 · {INTENT_LABEL.get(intent, intent)} · {service or '서비스 미상'}")
+                status.update(label=f"검색 중 · {INTENT_LABEL.get(intent, intent)} · {service or '서비스 미상'}")
                 found = rag.hybrid_search(search_q, intent=intent, service=service, top_k=CANDIDATES)
-                status.update(label=f"2/3 관련도 평가 ({len(found)}건)")
+                chips = st.empty()
+                render_progress_chips(chips, found)
+                status.update(label=f"관련도 평가 중 ({len(found)}건)")
                 cands, grounded = rag.rerank_candidates(search_q, found, top_k=top_k)
-                status.update(label=f"3/3 답변 생성 · 검색 {time.time() - t0:.1f}초", state="complete")
+                render_progress_chips(chips, cands)
+                status.update(label=f"답변 작성 중 · 검색 {time.time() - t0:.1f}초", state="complete")
 
             service_tag(service, intent)
             if grounded is False:

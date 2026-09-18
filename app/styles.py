@@ -138,6 +138,7 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
 .nhn-cite-no { color: var(--nhn-blue-800); font-weight: 700; margin-right: 0.2rem; }
 .nhn-cite-card a { color: var(--nhn-blue-800); text-decoration: none; margin-left: 0.3rem; }
 .nhn-cite-card a:hover { text-decoration: underline; }
+.nhn-progress-chip { font-size: 0.75rem; color: var(--nhn-gray-700); padding: 0.1rem 0; }
 
 /* ---------- 입력창 ---------- */
 [data-testid="stChatInput"] {
