@@ -43,7 +43,11 @@ Compute/Instance:
   - 인스턴스
   - 가상 서버
 Compute/Image:
-  - 이미지
+  # '이미지' 단독은 뺐다 — 다른 서비스 질문("이미지 업로드", "이미지 매니저")에 걸린다.
+  - 인스턴스 이미지
+Compute/Image Builder:
+  - 이미지 빌더
+  - 이미지빌더
 Compute/Auto Scale:
   - 오토스케일
   - 오토 스케일
@@ -57,8 +61,8 @@ Storage/Block Storage:
   - 볼륨
 Storage/NAS:
   - 나스
-Storage/Backup:
-  - 백업
+# Storage/Backup 은 수동 별칭을 두지 않는다 — '백업' 은 인스턴스·RDS·오브젝트
+# 스토리지 질문에도 그대로 나오는 일반어다. 자동 사전의 'Backup'/'backup' 으로 충분하다.
 Database/RDS for MySQL:
   - RDS
   - 마이에스큐엘
@@ -84,13 +88,17 @@ Security/Secure Key Manager:
 Security/Network-Firewall:
   - 방화벽
   - 네트워크 방화벽
+Security/WEB Firewall:
+  # '방화벽' 보다 길어서 웹 방화벽 질문은 이쪽이 이긴다 (가장 긴 별칭 우선).
+  - 웹 방화벽
+  - 웹방화벽
 Security/Cloud Access:
   - 클라우드 액세스
 Management/Certificate Manager:
   - 인증서
   - 인증서 매니저
 Notification/SMS:
-  - 문자
+  # '문자' 단독은 뺐다 — '문자열', '문자 인코딩' 같은 무관한 질문에 걸린다.
   - 문자 발송
   - 문자메시지
   - 문자 메시지
@@ -104,9 +112,11 @@ Notification/KakaoTalk Bizmessage:
   - 카카오톡
   - 친구톡
 Data & Analytics/Log & Crash Search:
-  - 로그
+  # '로그' 단독은 뺐다 — '로그인' 이 그대로 걸린다.
   - 로그 검색
   - 로그앤크래시
+  - 로그 앤 크래시
+  - 크래시 리포트
 Bill/eTax:
   - 전자세금계산서
   - 세금계산서

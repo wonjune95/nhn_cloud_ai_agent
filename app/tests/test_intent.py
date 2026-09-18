@@ -114,3 +114,24 @@ def test_manual_alias_keys_match_real_service_folders():
 
     missing = [k for k in mapping if not os.path.isdir(os.path.join(docs_dir, *k.split("/")))]
     assert missing == []
+
+
+@pytest.mark.parametrize("q", [
+    "로그인 화면이 안 보여",      # '로그' 가 '로그인' 안에서 잡히면 안 된다
+    "문자열 길이 제한",           # '문자' 가 '문자열' 안에서 잡히면 안 된다
+    "이미지 업로드 방법",         # '이미지' 는 어느 서비스 질문에나 나온다
+    "백업 설정은 어디서 해?",     # '백업' 도 마찬가지
+])
+def test_generic_korean_words_do_not_resolve_to_a_service(q):
+    """한글 별칭은 부분 문자열 매칭이라 일반어를 별칭으로 두면 오탐이 난다."""
+    assert detect_service(q, load_aliases()) is None
+
+
+@pytest.mark.parametrize("q,expected", [
+    ("문자 발송 실패", "Notification/SMS"),
+    ("로그 검색에서 에러 찾기", "Data & Analytics/Log & Crash Search"),
+    ("이미지 빌더로 이미지 만들기", "Compute/Image Builder"),
+    ("웹 방화벽 룰 추가", "Security/WEB Firewall"),
+])
+def test_specific_multiword_aliases_still_resolve(q, expected):
+    assert detect_service(q, load_aliases()) == expected
