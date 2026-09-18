@@ -374,9 +374,15 @@ FOLLOWUP_HINTS = (
 )
 
 
-def last_user_question(history):
+def last_user_question(history, skip=None):
+    """가장 최근 사용자 턴의 내용. skip 과 같은 내용의 턴은 건너뛰고 그 앞을 찾는다.
+
+    '다시 생성'은 같은 질문을 다시 물어 방금 그 질문 자신이 history 맨 끝에 남아 있는
+    경우다 — skip 으로 자기 자신을 걸러야 그 앞의(후속 질문이면 맥락이 되는) 진짜
+    직전 질문을 찾는다.
+    """
     for msg in reversed(history or []):
-        if msg["role"] == "user":
+        if msg["role"] == "user" and msg["content"] != skip:
             return msg["content"]
     return None
 
@@ -388,11 +394,8 @@ def retrieval_query(question, history=None):
     LLM 으로 질문을 다시 쓰면 호출이 한 번 늘어 요청 한도를 더 먹으므로,
     후속 질문으로 보이면 직전 질문을 앞에 붙이는 방식으로 대신한다.
     """
-    prev = last_user_question(history)
+    prev = last_user_question(history, skip=question)
     if not prev:
-        return question
-    if prev == question:
-        # 같은 질문을 다시 물으면 앞 질문을 붙이지 않는다 — 다시 생성.
         return question
 
     looks_followup = len(question) < 20 or any(h in question for h in FOLLOWUP_HINTS)

@@ -243,6 +243,17 @@ def test_retrieval_query_returns_question_unchanged_without_history():
     assert rag.retrieval_query("서브넷 만드는 법", None) == "서브넷 만드는 법"
 
 
+def test_retrieval_query_regenerate_of_followup_keeps_context():
+    """후속 질문을 '다시 생성'해도(history 맨 끝에 자기 자신이 있어도) 그 앞의 원래 질문을 이어 붙인다."""
+    history = [
+        {"role": "user", "content": "VPC가 뭐야"},
+        {"role": "assistant", "content": "…"},
+        {"role": "user", "content": "그건 콘솔에서 어떻게 해?"},
+        {"role": "assistant", "content": "…"},
+    ]
+    assert rag.retrieval_query("그건 콘솔에서 어떻게 해?", history) == "VPC가 뭐야 그건 콘솔에서 어떻게 해?"
+
+
 # ---------------------------------------------------------------- 의도별 시스템 프롬프트
 
 def test_system_prompt_by_intent():

@@ -12,9 +12,26 @@ def test_new_puts_conversation_first_and_caps():
     for i in range(cv.MAX_CONVERSATIONS + 3):
         c = cv.new(s)
         c["title"] = str(i)
+        # new() 는 메시지 없는 현재 대화를 재사용한다 — 매번 새로 만들려면 메시지를 채워 둔다.
+        c["messages"].append({"role": "user", "content": str(i)})
     assert len(s["conversations"]) == cv.MAX_CONVERSATIONS
     assert s["conversations"][0]["title"] == str(cv.MAX_CONVERSATIONS + 2)
     assert s["current"] == s["conversations"][0]["id"]
+
+
+def test_new_reuses_empty_current():
+    """이미 빈 대화를 보고 있으면 '새 대화'가 또 만들지 않고 그 대화를 그대로 돌려준다."""
+    s = {}
+    a = cv.new(s)
+    b = cv.new(s)
+    assert a is b
+    assert len(s["conversations"]) == 1
+
+    b["messages"].append({"role": "user", "content": "q"})
+    c = cv.new(s)
+    assert c is not b
+    assert len(s["conversations"]) == 2
+    assert s["current"] == c["id"]
 
 
 def test_switch_and_clear():

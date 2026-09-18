@@ -30,6 +30,12 @@ def current(state):
 def new(state):
     if "conversations" not in state:
         state["conversations"] = []
+    # 이미 빈 대화를 보고 있으면 그 대화를 또 만들지 않고 그대로 재사용한다 —
+    # 안 그러면 '새 대화'를 누를 때마다 빈 대화만 쌓인다.
+    if state["conversations"] and state.get("current") is not None:
+        cur = current(state)
+        if not cur["messages"]:
+            return cur
     c = _make()
     state["conversations"].insert(0, c)
     del state["conversations"][MAX_CONVERSATIONS:]

@@ -1,4 +1,6 @@
 """관리자 페이지 (스펙 4-3). questions 집계만 보여 준다. ADMIN_TOKEN 으로 보호한다(admin_auth)."""
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import streamlit as st
 
@@ -7,9 +9,17 @@ import admin_stats as s
 import schema_ready
 from db import get_conn
 
+# admin_stats.daily 가 'Asia/Seoul' 기준으로 날짜를 묶으므로, 화면에 찍는 다른 시각도
+# 같은 시간대로 맞춘다 — 안 그러면 같은 질문이 daily 차트와 표에서 서로 다른 날짜로 보인다.
+KST = ZoneInfo("Asia/Seoul")
+
 
 def _pct(v: float) -> str:
     return f"{v * 100:.0f}%"
+
+
+def _kst(dt):
+    return dt.astimezone(KST)
 
 
 def page():
@@ -81,21 +91,22 @@ def page():
         st.info("👎 받은 질문이 없습니다")
     else:
         for asked_at, question, service, _answer200, answer_full, sources in down:
-            with st.expander(f"{asked_at:%m-%d %H:%M} · {question[:40]} · {service or '-'}"):
+            with st.expander(f"{_kst(asked_at):%m-%d %H:%M} · {question[:40]} · {service or '-'}"):
                 st.markdown(answer_full)
                 st.json(sources)
 
     if q:
         st.subheader("검색 결과")
         st.dataframe(
-            pd.DataFrame(found, columns=["시각", "질문", "서비스", "근거", "피드백"]),
+            pd.DataFrame([(_kst(r[0]), *r[1:]) for r in found],
+                         columns=["시각", "질문", "서비스", "근거", "피드백"]),
             width="stretch", hide_index=True)
 
     st.subheader("미확인으로 끝난 질문")
-    st.dataframe(pd.DataFrame(ungrounded, columns=["시각", "질문", "서비스"]),
+    st.dataframe(pd.DataFrame([(_kst(r[0]), *r[1:]) for r in ungrounded], columns=["시각", "질문", "서비스"]),
                  width="stretch", hide_index=True)
     st.subheader(f"{s.SLOW_MS // 1000}초 초과 질문")
-    st.dataframe(pd.DataFrame(slow, columns=["시각", "질문", "소요(ms)"]),
+    st.dataframe(pd.DataFrame([(_kst(r[0]), *r[1:]) for r in slow], columns=["시각", "질문", "소요(ms)"]),
                  width="stretch", hide_index=True)
 
     st.subheader("인덱스")

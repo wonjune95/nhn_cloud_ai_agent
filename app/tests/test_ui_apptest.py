@@ -426,6 +426,17 @@ def test_sources_render_as_cards_not_expander(app):
     assert any("[1]" in m.value and "nhn-cite-card" in m.value for m in at.markdown)
 
 
+def test_source_card_html_rejects_non_http_scheme():
+    """javascript: 같은 스킴은 링크로 만들지 않는다 — http(s) 만 허용한다."""
+    import chat_page
+    from rag import Candidate
+    c = Candidate(content="본문", source_path="A/B/C.html", service="A/B", doc_type="other", score=0.0,
+                  source_url="javascript:alert(1)")
+    html_out = chat_page.source_card_html(1, c)
+    assert "<a" not in html_out
+    assert "원문" not in html_out
+
+
 def test_source_card_html_escapes_corpus_values():
     import chat_page
     from rag import Candidate
@@ -444,6 +455,10 @@ def test_status_shows_candidate_chips(app):
     status_texts = [m.value for m in at.markdown if "nhn-progress-chip" in m.value]
     assert status_texts, "status 안에 후보 칩이 없다"
     assert any("콘솔 사용 가이드" in t and "서브넷 생성" in t for t in status_texts)
+    # 답변이 끝나면 status 는 접혀 있어야 한다 (칩이 안 보였던 진행 칩 버그의 재발 방지).
+    # AppTest 가 expanded 를 노출하지 않는 streamlit 버전도 있으니 있을 때만 확인한다.
+    if hasattr(at.status[0], "expanded"):
+        assert at.status[0].expanded is False
 
 
 def test_candidate_chip_text():
@@ -473,7 +488,6 @@ def test_zoom_key_is_stable_per_question_and_image():
     import chat_page
     assert chat_page.zoom_key(42, 1, 0) == "zoom_q42_1"
     assert chat_page.zoom_key(42, 1, 7) == "zoom_s7_1"
-    assert chat_page.zoom_key(None, 2, 0) == "zoom_x_2"
 
 
 def test_examples_are_screenshot_rich_services():
@@ -550,3 +564,57 @@ def test_empty_screen_mentions_conversations_are_session_only(app):
     at, _ = app
     at.run()
     assert any("대화 목록은 브라우저 탭을 닫으면 사라집니다" in m.value for m in at.markdown)
+
+
+def test_regenerate_still_clickable_after_thumbs_down(app):
+    """👎 를 눌러 '의견 감사합니다' 캡션만 남아도 다시 생성은 계속 누를 수 있다."""
+    at, calls = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    next(b for b in at.button if b.label == "👎").click().run()
+    assert any("의견 감사합니다" in c.value for c in at.caption)
+
+    regen = [b for b in at.button if b.label == "다시 생성"]
+    assert regen, "투표 뒤에도 다시 생성 버튼이 있어야 한다"
+    searches_before = len([c for c in calls if c[0] == "search"])
+    regen[0].click().run()
+    assert not at.exception
+    searches_after = len([c for c in calls if c[0] == "search"])
+    assert searches_after == searches_before + 1
+
+
+def test_last_service_is_per_conversation(app):
+    """서비스 자동 추정 기억(last_service)은 대화마다 따로 간다 — 새 대화는 물려받지 않는다."""
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("VPC 서브넷 만드는 법").run()
+    conv_a = next(c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"])
+    assert conv_a["last_service"] == "Network/VPC"
+
+    new_btn = [b for b in at.sidebar.button if b.label == "새 대화"][0]
+    new_btn.click().run()
+    conv_b = next(c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"])
+    assert conv_b["id"] != conv_a["id"]
+    assert conv_b["last_service"] is None
+
+
+def test_clear_current_leaves_other_conversations_feedback_intact(app):
+    """'현재 대화 지우기'는 이 대화의 fb_* 만 지우고 다른 대화의 fb_* 는 남긴다."""
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    next(b for b in at.button if b.label == "👍").click().run()
+    assert "fb_q42" in at.session_state
+
+    new_btn = [b for b in at.sidebar.button if b.label == "새 대화"][0]
+    new_btn.click().run()
+    at.chat_input[0].set_value("오브젝트 스토리지 사용법").run()
+    next(b for b in at.button if b.label == "👍").click().run()
+    fb_keys_before = {k for k in at.session_state if k.startswith("fb_q")}
+    assert len(fb_keys_before) == 2
+
+    next(b for b in at.sidebar.button if b.label == "현재 대화 지우기").click().run()
+    assert not at.exception
+    assert "fb_q42" in at.session_state
+    fb_keys_after = {k for k in at.session_state if k.startswith("fb_q")}
+    assert fb_keys_after == {"fb_q42"}

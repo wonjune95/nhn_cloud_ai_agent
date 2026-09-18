@@ -84,9 +84,7 @@ def zoom_key(question_id, n, seq):
     """
     if seq:
         return f"zoom_s{seq}_{n}"
-    if question_id is not None:
-        return f"zoom_q{question_id}_{n}"
-    return f"zoom_x_{n}"
+    return f"zoom_q{question_id}_{n}"
 
 
 @st.dialog("스크린샷", width="large")
@@ -97,7 +95,7 @@ def show_screenshot(path: str, caption: str):
     st.image(path, caption=caption or None, width="stretch")
 
 
-def render_answer(text, image_map, question_id=None, seq=0):
+def render_answer(text, image_map, question_id, seq):
     """{{img:N}} 을 스크린샷으로 바꿔 그린다. 파일이 없으면 그 그림만 건너뛴다 (스펙 6절).
 
     part.path 는 문서 청크의 images 필드에서 온 값이라 신뢰하지 않는다 —
@@ -127,13 +125,16 @@ def render_answer(text, image_map, question_id=None, seq=0):
 
 def source_card_html(i: int, c) -> str:
     """출처 카드 한 줄. 값은 전부 코퍼스에서 온 것(서비스·문서명·섹션·URL)이지만 크롤링 원본이라
-    믿지 않고 HTML 로 그리기 전에 이스케이프한다."""
+    믿지 않고 HTML 로 그리기 전에 이스케이프한다.
+
+    source_url 이 http(s) 로 시작할 때만 링크를 만든다 — javascript: 같은 스킴이 그대로
+    저장돼 있으면 클릭 시 실행될 수 있어서다."""
     name = html.escape(os.path.splitext(os.path.basename(c.source_path))[0], quote=True)
     section = html.escape((c.section_path or "").replace(" > ", " › "), quote=True)
     service = html.escape(c.service, quote=True)
     link = (
-        f' <a href="{html.escape(c.source_url, quote=True)}" target="_blank">원문 ↗</a>'
-        if c.source_url else ""
+        f' <a href="{html.escape(c.source_url, quote=True)}" target="_blank" rel="noopener noreferrer">원문 ↗</a>'
+        if c.source_url and c.source_url.startswith(("http://", "https://")) else ""
     )
     return (
         f'<div class="nhn-cite-card"><span class="nhn-cite-no">[{i}]</span> '
@@ -302,11 +303,14 @@ def page():
 
 def answer_question(rag, conv, question, chosen, top_k):
     # '다시 생성' 이 같은 질문을 다시 보내는 경우의 검색어 중복(질문이 자기 자신을 후속
-    # 질문으로 오인)은 rag.retrieval_query 에서 처리한다(prev == question 이면 안 붙임).
-    # 여기서 history 를 걸러내면 답변(어시스턴트) 턴만 남아 rag.answer_stream 의 프롬프트에
-    # 질문 없는 고아 답변 턴이 들어가 다시 생성이 이전 답변을 되풀이하기 쉬워진다.
+    # 질문으로 오인)은 rag.retrieval_query 에서 처리한다(자기 자신과 같은 직전 사용자
+    # 턴은 건너뛰고 그 앞 질문을 찾는다). 여기서 history 를 걸러내면 답변(어시스턴트)
+    # 턴만 남아 rag.answer_stream 의 프롬프트에 질문 없는 고아 답변 턴이 들어가 다시
+    # 생성이 이전 답변을 되풀이하기 쉬워진다.
     history = list(conv["messages"])
-    conv["messages"].append({"role": "user", "content": question})
+    # 사용자 메시지는 답변(성공·실패 모두)과 함께 마지막에 붙인다 — 도중에 앱이
+    # 죽거나 예외로 답이 안 남으면 질문만 대화에 남는 고아 턴이 생기기 때문이다.
+    # 화면에는 여기서 바로 그린다.
     user_bubble(question)
 
     # 확대 버튼 키에 쓸 세션 카운터. question_id 는 로그 저장(qlog.log_question) 뒤에야
@@ -322,7 +326,7 @@ def answer_question(rag, conv, question, chosen, top_k):
 
     with st.chat_message("assistant", avatar="☁️"):
         try:
-            with st.status("검색 중…", expanded=False) as status:
+            with st.status("검색 중…", expanded=True) as status:
                 search_q = rag.retrieval_query(question, history)
                 intent = rag.detect_intent(question)
                 if chosen != AUTO:
@@ -339,7 +343,7 @@ def answer_question(rag, conv, question, chosen, top_k):
                 status.update(label=f"관련도 평가 중 ({len(found)}건)")
                 cands, grounded = rag.rerank_candidates(search_q, found, top_k=top_k)
                 render_progress_chips(chips, cands)
-                status.update(label=f"답변 작성 중 · 검색 {time.time() - t0:.1f}초", state="complete")
+                status.update(label=f"답변 작성 중 · 검색 {time.time() - t0:.1f}초", state="complete", expanded=False)
 
             service_tag(service, intent)
             if grounded is False:
@@ -358,7 +362,7 @@ def answer_question(rag, conv, question, chosen, top_k):
                     answer = st.write_stream(stream)
                 holder.empty()
                 with holder.container():
-                    render_answer(answer, image_map, seq=seq)
+                    render_answer(answer, image_map, None, seq)
                 render_sources(cands)
         except Exception as e:
             answer = "⚠️ 모델 서버가 일시적으로 혼잡해 답변을 만들지 못했습니다. 잠시 후 다시 질문해 주세요."
@@ -378,6 +382,7 @@ def answer_question(rag, conv, question, chosen, top_k):
         )
         feedback_buttons(question_id, question, seq)
 
+    conv["messages"].append({"role": "user", "content": question})
     conv["messages"].append({
         "role": "assistant", "content": answer, "cands": cands, "image_map": image_map,
         "service": service, "intent": intent, "grounded": grounded,
