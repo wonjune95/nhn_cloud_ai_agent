@@ -39,7 +39,9 @@ def judge(item, cand_paths, first_line, valid_marker_count, answer, elapsed_s, e
 
     r.hit5 = item["expect_path"] in cand_paths[:5]
     if kind == "console":
-        r.menu_ok = item["expect_menu"] in first_line and "명시되지 않음" not in first_line
+        # 콘솔 프롬프트가 첫 줄에 언제나 '콘솔 > 카테고리 > 서비스' 를 쓰므로
+        # '명시되지 않음' 예외는 더 없다 — 기대 서비스명이 들어 있는지만 본다.
+        r.menu_ok = item["expect_menu"] in first_line
         r.shots_ok = valid_marker_count >= 1
     return r
 

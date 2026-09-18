@@ -19,8 +19,9 @@ def test_console_all_pass():
     assert (r.hit5, r.menu_ok, r.shots_ok, r.outside_ok) == (True, True, True, None)
 
 
-def test_console_menu_fails_when_first_line_says_unspecified():
-    r = scoring.judge(CONSOLE, ["Network/DNS Plus/콘솔 사용 가이드.html"], "메뉴 경로: 문서에 명시되지 않음", 0, "본문", 8.0, None)
+def test_console_menu_fails_when_first_line_lacks_expected_service():
+    # 기대 서비스명('DNS Plus')이 첫 줄에 없으면 실패다 — 다른 서비스의 경로를 썼든, 경로가 아니든.
+    r = scoring.judge(CONSOLE, ["Network/DNS Plus/콘솔 사용 가이드.html"], "콘솔 > Network > VPC", 0, "본문", 8.0, None)
     assert r.hit5 is True and r.menu_ok is False and r.shots_ok is False
 
 

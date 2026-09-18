@@ -268,6 +268,52 @@ def rerank_candidates(query, candidates: list[Candidate], top_k=TOP_K):
     return [candidates[i] for i in order], any(grounded[i] for i in order)
 
 
+# 이웃 청크에서 빌려올 스크린샷의 최대 장수.
+SIBLING_IMAGE_CAP = 3
+
+
+def _top_section(section_path: str) -> str:
+    return (section_path or "").split(" > ")[0].strip()
+
+
+def _usable_images(cand: Candidate) -> list:
+    return [img for img in (cand.images or []) if not img.get("missing")]
+
+
+def enrich_images(cands: list[Candidate], intent: str) -> list[Candidate]:
+    """콘솔 의도에서 이미지가 없는 후보에 같은 문서·같은 최상위 섹션의 이웃 청크 이미지를
+    최대 SIBLING_IMAGE_CAP 장 빌려준다 (missing 아닌 것만, bm25_meta 순서). 원본은 바꾸지 않고 replace() 로 돌려준다.
+
+    절차 본문만 담긴 청크가 상위 5 에 올라오고 스크린샷은 같은 섹션의 옆 청크에 있는 일이 잦다.
+    리랭킹은 글만 보고 판단해야 하므로 이 보정은 리랭킹 뒤에 따로 건다.
+    """
+    if intent != "console":
+        return cands
+
+    out: list[Candidate] = []
+    for cand in cands:
+        if _usable_images(cand):
+            out.append(cand)
+            continue
+
+        top = _top_section(cand.section_path)
+        borrowed: list = []
+        for sib in bm25_meta:
+            if len(borrowed) >= SIBLING_IMAGE_CAP:
+                break
+            if sib.source_path != cand.source_path or sib.content == cand.content:
+                continue
+            if _top_section(sib.section_path) != top:
+                continue
+            for img in _usable_images(sib):
+                borrowed.append(img)
+                if len(borrowed) >= SIBLING_IMAGE_CAP:
+                    break
+
+        out.append(replace(cand, images=borrowed) if borrowed else cand)
+    return out
+
+
 _SYSTEM_COMMON = (
     "너는 NHN Cloud 공식 문서를 근거로 답하는 기술 지원 어시스턴트다. "
     "반드시 제공된 문서 내용만 근거로 삼고, 문서에 없는 내용은 지어내지 말고 "
@@ -275,16 +321,22 @@ _SYSTEM_COMMON = (
     "이전 대화가 주어지면 '그것', '거기' 같은 지시어가 무엇을 가리키는지 그 맥락으로 해석해 이어서 답해라. "
     "단, 이전 대화 내용 자체를 근거로 삼지 말고 근거는 언제나 제공된 문서에서만 찾아라. "
     "각 문서 본문의 첫 줄 '문서명 > 섹션 경로'는 문서 안 위치이지 콘솔 메뉴 경로가 아니다. "
-    "콘솔 메뉴 경로는 본문에 명시된 것만 써라. 답변은 한국어로 해라. "
+    "답변은 한국어로 해라. "
 )
 
-SYSTEM_PROMPT = _SYSTEM_COMMON + "절차는 번호 목록으로, 파라미터·필드는 표로 정리해라."
+SYSTEM_PROMPT = _SYSTEM_COMMON + (
+    "콘솔 메뉴 경로는 본문에 명시된 것만 써라. 절차는 번호 목록으로, 파라미터·필드는 표로 정리해라."
+)
 
 # 콘솔 절차 질문의 답변 형식 (스펙 3-2). 그림 번호는 프롬프트의 '[그림 N]' 과 같은 N 이다.
 CONSOLE_SYSTEM_PROMPT = _SYSTEM_COMMON + (
     "답변 형식: "
-    "첫 줄에는 문서 본문에 명시된 콘솔 메뉴 경로만 '콘솔 > Network > VPC > Subnet' 형태로 써라. "
-    "문서에 메뉴 경로가 없으면 첫 줄에 '메뉴 경로: 문서에 명시되지 않음'이라고 써라. "
+    "첫 줄은 언제나 콘솔 메뉴 경로다. 답변의 근거가 된 문서 블록 머리말의 '서비스: 카테고리/서비스' 값을 "
+    "그대로 가져와 '콘솔 > 카테고리 > 서비스' 형태로 써라 — '/' 는 ' > ' 로 바꾼다 "
+    "(예: 서비스가 'Network/DNS Plus' 이면 '콘솔 > Network > DNS Plus'). "
+    "본문에 그보다 아래 단계의 탭·메뉴 이름이 분명히 적혀 있을 때만 ' > ' 로 이어 붙여라 "
+    "(예: '콘솔 > Network > VPC > Subnet'). 적혀 있지 않으면 카테고리·서비스까지만 쓰고, "
+    "메뉴 경로를 비워 두거나 모른다고 쓰지 마라. "
     "그다음 절차를 번호 목록으로 써라. 문서 블록에 '[그림 N]'으로 표시된 스크린샷이 어느 단계에 해당하면 "
     "그 단계 문장 끝에 {{img:N}} 를 붙여라 (예: '3. 서브넷 생성을 클릭합니다. {{img:2}}'). "
     "문서 블록에 없는 그림 번호는 절대 쓰지 마라. "

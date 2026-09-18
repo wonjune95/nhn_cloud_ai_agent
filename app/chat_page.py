@@ -241,6 +241,7 @@ def answer_question(rag, question, chosen, top_k):
                 found = rag.hybrid_search(search_q, intent=intent, service=service, top_k=CANDIDATES)
                 status.update(label=f"2/3 관련도 평가 ({len(found)}건)")
                 cands, grounded = rag.rerank_candidates(search_q, found, top_k=top_k)
+                cands = rag.enrich_images(cands, intent)
                 status.update(label=f"3/3 답변 생성 · 검색 {time.time() - t0:.1f}초", state="complete")
 
             service_tag(service, intent)

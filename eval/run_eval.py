@@ -35,6 +35,7 @@ def run_one(rag, ar, item):
         service = rag.detect_service(q, rag.ALIASES)
         found = rag.hybrid_search(q, intent=intent, service=service)
         cands, grounded = rag.rerank_candidates(q, found, top_k=5)
+        cands = rag.enrich_images(cands, intent)
         cand_paths = [c.source_path for c in cands]
         if grounded is False:
             answer, image_map = ar.NOT_GROUNDED_MESSAGE, {}

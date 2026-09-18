@@ -226,12 +226,99 @@ def test_system_prompt_by_intent():
 
 def test_console_prompt_spells_out_format_rules():
     p = rag.CONSOLE_SYSTEM_PROMPT
-    assert "메뉴 경로: 문서에 명시되지 않음" in p
+    # 첫 줄은 문서 머리말의 '서비스: 카테고리/서비스' 에서 만든다.
+    assert "콘솔 > 카테고리 > 서비스" in p
+    assert "서비스: 카테고리/서비스" in p
+    # '문서에 명시되지 않음' 으로 빠져나가는 길은 없앴다.
+    assert "명시되지 않음" not in p
     assert "{{img:N}}" in p
     assert "주의" in p
     # 공통 근거 제한 문구는 두 프롬프트에 모두 있어야 한다.
     assert "제공된 문서에서 확인되지 않습니다" in p
     assert "제공된 문서에서 확인되지 않습니다" in rag.SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------- 이웃 청크 이미지 차용
+
+def chunk(text, *, doc="콘솔 사용 가이드", service="Network/VPC", section="서브넷 생성", images=None):
+    """같은 문서(doc) 안의 서로 다른 청크. 본문만 다르고 source_path 는 같다."""
+    c = cand(doc, service=service, section=section)
+    c.content = f"{text} 본문"
+    c.images = [] if images is None else images
+    return c
+
+
+def img(path, missing=False):
+    return {"path": path, "caption": f"{path} 캡션", "alt": "", "missing": missing}
+
+
+def test_enrich_images_borrows_from_siblings_in_same_doc_and_section(monkeypatch):
+    target = chunk("절차", section="서브넷 생성 > 3단계")
+    monkeypatch.setattr(rag, "bm25_meta", [
+        # 같은 문서·같은 최상위 섹션 — missing 은 건너뛴다.
+        chunk("옆1", images=[img("p/miss.png", missing=True), img("p/1.png")]),
+        chunk("옆2", section="서브넷 생성 > 2단계", images=[img("p/2.png"), img("p/3.png"), img("p/4.png")]),
+        # 다른 최상위 섹션 — 제외.
+        chunk("다른섹션", section="VPC 생성", images=[img("p/other-section.png")]),
+        # 다른 문서 — 제외.
+        chunk("다른문서", doc="다른 가이드", section="서브넷 생성", images=[img("p/other-doc.png")]),
+    ])
+
+    out = rag.enrich_images([target], "console")
+
+    assert [i["path"] for i in out[0].images] == ["p/1.png", "p/2.png", "p/3.png"]
+    assert len(out[0].images) == rag.SIBLING_IMAGE_CAP
+    # 나머지 필드는 그대로다.
+    assert out[0].content == target.content and out[0].section_path == target.section_path
+
+
+def test_enrich_images_leaves_candidate_with_images_alone(monkeypatch):
+    monkeypatch.setattr(rag, "bm25_meta", [chunk("옆", images=[img("p/sib.png")])])
+    c = cand("콘솔 사용 가이드")  # cand() 는 이미 이미지를 하나 들고 있다.
+
+    out = rag.enrich_images([c], "console")
+
+    assert out[0] is c
+    assert [i["path"] for i in out[0].images] == ["Network/VPC/images/콘솔 사용 가이드.png"]
+
+
+def test_enrich_images_is_noop_for_general_intent(monkeypatch):
+    monkeypatch.setattr(rag, "bm25_meta", [chunk("옆", images=[img("p/1.png")])])
+    cands = [chunk("절차")]
+
+    assert rag.enrich_images(cands, "general") is cands
+    assert cands[0].images == []
+
+
+def test_enrich_images_does_not_mutate_the_original_candidate(monkeypatch):
+    target = chunk("절차")
+    monkeypatch.setattr(rag, "bm25_meta", [chunk("옆", section="서브넷 생성 > 2단계", images=[img("p/1.png")])])
+
+    out = rag.enrich_images([target], "console")
+
+    assert [i["path"] for i in out[0].images] == ["p/1.png"]
+    assert target.images == []
+    assert out[0] is not target
+
+
+def test_enrich_images_keeps_candidate_without_any_sibling_image(monkeypatch):
+    target = chunk("절차")
+    monkeypatch.setattr(rag, "bm25_meta", [chunk("옆", doc="다른 가이드", images=[img("p/1.png")])])
+
+    out = rag.enrich_images([target], "console")
+
+    assert out[0] is target and out[0].images == []
+
+
+def test_borrowed_images_are_numbered_like_any_other(monkeypatch):
+    target = chunk("절차")
+    monkeypatch.setattr(rag, "bm25_meta", [chunk("옆", section="서브넷 생성 > 2단계", images=[img("p/1.png")])])
+
+    cands = rag.enrich_images([target], "console")
+    prompt, image_map = rag.build_prompt("q", cands)
+
+    assert image_map == {1: rag.ImageRef("p/1.png", "p/1.png 캡션")}
+    assert "[그림 1] p/1.png 캡션" in prompt
 
 
 def test_answer_stream_returns_stream_and_map(monkeypatch):
