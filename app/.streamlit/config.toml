@@ -13,3 +13,6 @@ headless = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"   # 오른쪽 위 Deploy·개발자 메뉴 숨김

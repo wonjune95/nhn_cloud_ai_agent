@@ -129,6 +129,7 @@ def test_run_one_scores_hit5_even_when_not_grounded():
     fake_ar = types.SimpleNamespace(
         NOT_GROUNDED_MESSAGE=scoring.NOT_GROUNDED_MESSAGE,
         valid_markers=lambda answer, image_map: [],
+        strip_leading_symbols=lambda text: text,
     )
 
     r = run_eval.run_one(fake_rag, fake_ar, CONSOLE)

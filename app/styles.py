@@ -42,6 +42,12 @@ CSS = """
 html, body, [class*="st-"], .stMarkdown, .stChatInput textarea {
   font-family: var(--nhn-font) !important;
 }
+/* 위 규칙이 Streamlit 아이콘 폰트(Material Symbols)까지 덮어쓰면 아이콘이 'check', 'visibility'
+   같은 글자로 그려진다. 아이콘 요소는 원래 폰트로 되돌린다. */
+[data-testid="stIconMaterial"], [data-testid^="stExpanderIcon"], span.material-symbols-rounded, [class*="material-symbols"],
+span[translate="no"][data-testid$="Check"], span[translate="no"][data-testid$="Icon"] {
+  font-family: "Material Symbols Rounded" !important;
+}
 
 /* 기본 Streamlit 헤더 숨기고 여백 정리 */
 header[data-testid="stHeader"] { background: transparent; height: 0; }

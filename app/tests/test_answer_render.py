@@ -38,3 +38,11 @@ def test_valid_markers_keeps_order_and_repeats_but_not_out_of_range():
 
 def test_not_grounded_message_is_fixed():
     assert ar.NOT_GROUNDED_MESSAGE == "제공된 문서에서 확인되지 않습니다."
+
+
+def test_strip_leading_symbols_removes_emoji_and_bom_but_keeps_markdown():
+    assert ar.strip_leading_symbols("📍콘솔 > Network > VPC") == "콘솔 > Network > VPC"
+    assert ar.strip_leading_symbols("﻿▶ 콘솔 > SMS") == "콘솔 > SMS"
+    assert ar.strip_leading_symbols("# 제목\n본문") == "# 제목\n본문"
+    assert ar.strip_leading_symbols("1. 단계") == "1. 단계"
+    assert ar.strip_leading_symbols("") == ""

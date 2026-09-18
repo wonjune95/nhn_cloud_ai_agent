@@ -12,6 +12,14 @@ MARKER = re.compile(r"\{\{img:(\d+)\}\}")
 # grounded == False 일 때 LLM 을 부르지 않고 그대로 보여 주는 문구 (스펙 3-3).
 NOT_GROUNDED_MESSAGE = "제공된 문서에서 확인되지 않습니다."
 
+# 모델이 첫 줄 앞에 붙이는 이모지·기호(📍, ▶, U+FEFF 등)는 브라우저에서 깨진 상자로 보인다.
+# 글자·숫자·마크다운 기호(#, -, *, [, `, > 등)가 나올 때까지 앞을 지운다.
+_LEADING_JUNK = re.compile(r"^[^\w\[\]#*\-`>|(가-힣]+", re.UNICODE)
+
+
+def strip_leading_symbols(text: str) -> str:
+    return _LEADING_JUNK.sub("", text or "", count=1)
+
 
 def split_markers(text: str, image_map: dict[int, ImageRef]) -> list[tuple[str, str | ImageRef]]:
     """[("text", 문자열) | ("image", ImageRef)] 순서 목록. 순번표에 없는 번호는 지우고 stderr 에 남긴다."""

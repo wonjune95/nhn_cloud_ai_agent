@@ -7,7 +7,7 @@ st.set_page_config(
     page_title="NHN Cloud 콘솔 안내 봇",
     page_icon="☁️",
     layout="centered",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto"  # 모바일 폭에서는 접힌 채로 시작한다,
 )
 st.markdown(CSS, unsafe_allow_html=True)
 

@@ -268,7 +268,13 @@ def page():
     st.session_state.setdefault("pending", None)
     st.session_state.setdefault("session_id", uuid.uuid4().hex)
 
-    if not conv["messages"]:
+    # 입력창은 화면 맨 아래에 고정되므로 먼저 읽어도 위치가 바뀌지 않는다. 첫 질문을 처리하는
+    # rerun 에서는 messages 가 아직 비어 있으므로, question 이 있으면 빈 화면(예시 버튼)을 그리지 않는다.
+    typed = st.chat_input("NHN Cloud 콘솔 사용법을 질문하세요")
+    question = typed or st.session_state.pending
+    st.session_state.pending = None
+
+    if not conv["messages"] and not question:
         st.markdown(
             '<div class="nhn-empty"><h2>무엇을 도와드릴까요?</h2>'
             "<p>콘솔에서 어떻게 하는지 물어보세요. 메뉴 경로와 화면을 함께 안내합니다.</p></div>",
@@ -293,9 +299,6 @@ def page():
         else:
             render_assistant(msg, last_user)
 
-    typed = st.chat_input("NHN Cloud 콘솔 사용법을 질문하세요")
-    question = typed or st.session_state.pending
-    st.session_state.pending = None
     if question:
         cv.set_title_if_empty(conv, question)
         answer_question(rag, conv, question, chosen, top_k)
@@ -343,7 +346,8 @@ def answer_question(rag, conv, question, chosen, top_k):
                 status.update(label=f"관련도 평가 중 ({len(found)}건)")
                 cands, grounded = rag.rerank_candidates(search_q, found, top_k=top_k)
                 render_progress_chips(chips, cands)
-                status.update(label=f"답변 작성 중 · 검색 {time.time() - t0:.1f}초", state="complete", expanded=False)
+                search_s = time.time() - t0
+                status.update(label=f"답변 작성 중 · 검색 {search_s:.1f}초", state="complete", expanded=False)
 
             service_tag(service, intent)
             if grounded is False:
@@ -360,10 +364,12 @@ def answer_question(rag, conv, question, chosen, top_k):
                 holder = st.empty()
                 with holder.container():
                     answer = st.write_stream(stream)
+                answer = ar.strip_leading_symbols(answer)
                 holder.empty()
                 with holder.container():
                     render_answer(answer, image_map, None, seq)
                 render_sources(cands)
+                status.update(label=f"완료 · 검색 {search_s:.1f}초 · 답변 {time.time() - t0 - search_s:.1f}초")
         except Exception as e:
             answer = "⚠️ 모델 서버가 일시적으로 혼잡해 답변을 만들지 못했습니다. 잠시 후 다시 질문해 주세요."
             failed, error_text = True, f"{type(e).__name__}: {e}"

@@ -44,6 +44,7 @@ def run_one(rag, ar, item):
             cands = rag.enrich_images(cands, intent)
             stream, image_map = rag.answer_stream(q, cands, intent=intent)
             answer = "".join(stream)
+        answer = ar.strip_leading_symbols(answer)
         first_line = answer.strip().splitlines()[0] if answer.strip() else ""
         valid = len(ar.valid_markers(answer, image_map))
         return scoring.judge(item, cand_paths, first_line, valid, answer, time.time() - t0, None,

@@ -633,3 +633,18 @@ def test_admin_token_accepts_enter_and_trims_whitespace(monkeypatch):
     assert not at.exception
     at.run()
     assert any(m.value == "12" for m in at.metric)
+
+
+def test_empty_screen_hidden_while_first_answer_renders(app):
+    """첫 질문을 처리하는 rerun 에서 예시 버튼 화면이 답변 위에 남지 않는다."""
+    at, _ = app
+    at.run()
+    assert any(b.label == chat_page_examples()[0] for b in at.button)
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert not at.exception
+    assert not any(b.label == chat_page_examples()[0] for b in at.button)
+
+
+def chat_page_examples():
+    import chat_page
+    return chat_page.EXAMPLES

@@ -78,9 +78,9 @@ def page():
         st.info("기간 안에 질문이 없습니다")
     else:
         df = pd.DataFrame(daily, columns=["일자", "질문 수", "응답 중앙값(초)", "👎"]).set_index("일자")
-        st.line_chart(df[["질문 수"]])
-        st.line_chart(df[["응답 중앙값(초)"]])
-        st.bar_chart(df[["👎"]])
+        st.bar_chart(df[["질문 수"]], height=220)
+        st.bar_chart(df[["응답 중앙값(초)"]], height=220)
+        st.bar_chart(df[["👎"]], height=220)
 
     st.subheader("서비스별")
     st.dataframe(pd.DataFrame(services, columns=["서비스", "질문 수", "👎", "미확인"]),
