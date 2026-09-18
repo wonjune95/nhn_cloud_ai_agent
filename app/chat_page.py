@@ -8,6 +8,7 @@ import uuid
 import streamlit as st
 
 import answer_render as ar
+import conversations as cv
 import db
 import qlog
 import schema_ready
@@ -212,6 +213,8 @@ def page():
         unsafe_allow_html=True,
     )
 
+    conv = cv.ensure(st.session_state)
+
     try:
         rag, doc_count = load_index()
         ready, load_error = True, None
@@ -219,6 +222,16 @@ def page():
         rag, doc_count, ready, load_error = None, 0, False, e
 
     with st.sidebar:
+        if st.button("새 대화", width="stretch", key="conv_new"):
+            cv.new(st.session_state)
+            st.rerun()
+        for c in st.session_state["conversations"]:
+            label = c["title"] or "(빈 대화)"
+            if st.button(label, key=f"conv_{c['id']}", width="stretch",
+                         type="primary" if c["id"] == st.session_state["current"] else "secondary"):
+                cv.switch(st.session_state, c["id"])
+                st.rerun()
+        st.divider()
         st.markdown("### 인덱스")
         st.markdown(
             f'<div class="nhn-kv"><span>상태</span><span>{"연결됨" if ready else "연결 실패"}</span></div>'
@@ -237,11 +250,13 @@ def page():
         chosen = st.selectbox("서비스", [AUTO] + services, help="자동이면 질문에서 서비스를 추정합니다.")
         top_k = st.slider("참고 문서 수", 3, 10, 5)
         st.divider()
-        if st.button("대화 초기화", width="stretch"):
-            st.session_state.messages = []
-            st.session_state.pop("last_service", None)
-            for k in [k for k in st.session_state if str(k).startswith("fb_")]:
-                st.session_state.pop(k, None)
+        if st.button("현재 대화 지우기", width="stretch", key="conv_clear"):
+            # 이 대화의 피드백 상태만 지운다 — 다른 대화의 fb_ 는 건드리지 않는다.
+            for m in conv["messages"]:
+                if m.get("question_id") is not None:
+                    st.session_state.pop(feedback_key(m["question_id"]), None)
+            cv.clear_current(st.session_state)
+            conv["last_service"] = None
             st.rerun()
 
     if not ready:
@@ -249,18 +264,18 @@ def page():
         st.caption(f"상세: {type(load_error).__name__}: {load_error}")
         st.stop()
 
-    st.session_state.setdefault("messages", [])
     st.session_state.setdefault("pending", None)
     st.session_state.setdefault("session_id", uuid.uuid4().hex)
 
-    if not st.session_state.messages:
+    if not conv["messages"]:
         st.markdown(
             '<div class="nhn-empty"><h2>무엇을 도와드릴까요?</h2>'
             "<p>콘솔에서 어떻게 하는지 물어보세요. 메뉴 경로와 화면을 함께 안내합니다.</p></div>",
             unsafe_allow_html=True,
         )
         st.markdown(
-            '<div class="nhn-hint">서비스 이름을 함께 쓰면 더 정확합니다 (예: VPC, Object Storage)</div>',
+            '<div class="nhn-hint">서비스 이름을 함께 쓰면 더 정확합니다 (예: VPC, Object Storage)<br>'
+            '대화 목록은 브라우저 탭을 닫으면 사라집니다</div>',
             unsafe_allow_html=True,
         )
         cols = st.columns(2)
@@ -270,7 +285,7 @@ def page():
                 st.rerun()
 
     last_user = None
-    for msg in st.session_state.messages:
+    for msg in conv["messages"]:
         if msg["role"] == "user":
             user_bubble(msg["content"])
             last_user = msg["content"]
@@ -281,16 +296,17 @@ def page():
     question = typed or st.session_state.pending
     st.session_state.pending = None
     if question:
-        answer_question(rag, question, chosen, top_k)
+        cv.set_title_if_empty(conv, question)
+        answer_question(rag, conv, question, chosen, top_k)
 
 
-def answer_question(rag, question, chosen, top_k):
+def answer_question(rag, conv, question, chosen, top_k):
     # '다시 생성' 이 같은 질문을 다시 보내는 경우의 검색어 중복(질문이 자기 자신을 후속
     # 질문으로 오인)은 rag.retrieval_query 에서 처리한다(prev == question 이면 안 붙임).
     # 여기서 history 를 걸러내면 답변(어시스턴트) 턴만 남아 rag.answer_stream 의 프롬프트에
     # 질문 없는 고아 답변 턴이 들어가 다시 생성이 이전 답변을 되풀이하기 쉬워진다.
-    history = list(st.session_state.messages)
-    st.session_state.messages.append({"role": "user", "content": question})
+    history = list(conv["messages"])
+    conv["messages"].append({"role": "user", "content": question})
     user_bubble(question)
 
     # 확대 버튼 키에 쓸 세션 카운터. question_id 는 로그 저장(qlog.log_question) 뒤에야
@@ -314,8 +330,8 @@ def answer_question(rag, question, chosen, top_k):
                     # (다시 '자동' 으로 돌아왔을 때 그 선택을 물려받으면 안 된다.)
                     service = chosen
                 else:
-                    service = rag.detect_service(search_q, rag.ALIASES, fallback=st.session_state.get("last_service"))
-                    st.session_state.last_service = service
+                    service = rag.detect_service(search_q, rag.ALIASES, fallback=conv.get("last_service"))
+                    conv["last_service"] = service
                 status.update(label=f"검색 중 · {INTENT_LABEL.get(intent, intent)} · {service or '서비스 미상'}")
                 found = rag.hybrid_search(search_q, intent=intent, service=service, top_k=CANDIDATES)
                 chips = st.empty()
@@ -362,7 +378,7 @@ def answer_question(rag, question, chosen, top_k):
         )
         feedback_buttons(question_id, question, seq)
 
-    st.session_state.messages.append({
+    conv["messages"].append({
         "role": "assistant", "content": answer, "cands": cands, "image_map": image_map,
         "service": service, "intent": intent, "grounded": grounded,
         "question_id": question_id, "error": failed, "seq": seq,

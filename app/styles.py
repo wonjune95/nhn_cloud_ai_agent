@@ -178,6 +178,16 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
   background: var(--nhn-blue-100);
 }
 
+/* 대화 목록 — 긴 제목은 한 줄로 자르고, 지금 보고 있는 대화(primary)만 파랗게 */
+[data-testid="stSidebar"] .stButton button p {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;
+}
+[data-testid="stSidebar"] .stButton button[kind="primary"],
+[data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] {
+  background: var(--nhn-blue-100); border-color: var(--nhn-blue-700);
+  color: var(--nhn-blue-700); font-weight: 700;
+}
+
 /* 상태 박스 */
 [data-testid="stStatusWidget"], [data-testid="stExpander"] {
   border-radius: var(--nhn-radius-12);

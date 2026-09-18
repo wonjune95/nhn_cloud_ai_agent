@@ -62,6 +62,11 @@ def fake_index(monkeypatch, calls):
     chat_page.load_index.clear()
 
 
+def _messages(at):
+    """현재 대화의 messages. 대화 목록(Task 5) 뒤로 messages 는 session_state 최상위가 아니다."""
+    return [c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"]][0]["messages"]
+
+
 @pytest.fixture
 def app(monkeypatch):
     calls = []
@@ -248,16 +253,16 @@ def test_feedback_buttons_show_caption_when_question_id_is_none(app, monkeypatch
 
 
 def test_reset_clears_feedback_state(app):
-    """'대화 초기화' 는 fb_* 상태까지 지운다 (순번 재사용으로 남의 평가를 물려받지 않게)."""
+    """'현재 대화 지우기' 는 fb_* 상태까지 지운다 (순번 재사용으로 남의 평가를 물려받지 않게)."""
     at, calls = app
     at.run()
     at.chat_input[0].set_value("서브넷 만드는 법").run()
     next(b for b in at.button if b.label == "👎").click().run()
     assert any("의견 감사합니다" in c.value for c in at.caption)
 
-    next(b for b in at.button if b.label == "대화 초기화").click().run()
+    next(b for b in at.button if b.label == "현재 대화 지우기").click().run()
     assert not at.exception
-    assert not at.session_state.messages
+    assert not _messages(at)
     assert "fb_q42" not in at.session_state
     assert not any("의견 감사합니다" in c.value for c in at.caption)
 
@@ -464,7 +469,7 @@ def test_regenerate_reasks_same_question(app):
     searches = [c for c in calls if c[0] == "search"]
     assert len(searches) == 2 and searches[1][1] == "서브넷 만드는 법"
     # 이전 답변은 남고 새 답변이 붙는다
-    assert sum(1 for m in at.session_state["messages"] if m["role"] == "assistant") == 2
+    assert sum(1 for m in _messages(at) if m["role"] == "assistant") == 2
 
 
 def test_empty_screen_shows_hint(app):
@@ -495,3 +500,26 @@ def test_regenerate_with_images_renders_two_distinct_zoom_buttons(app, monkeypat
     zoom = [b for b in at.button if b.label == "크게 보기"]
     assert len(zoom) == 2
     assert len({b.key for b in zoom}) == 2
+
+
+def test_new_conversation_and_switch(app):
+    at, _ = app
+    at.run()
+    at.chat_input[0].set_value("서브넷 만드는 법").run()
+    assert len(at.session_state["conversations"]) == 1
+    assert at.session_state["conversations"][0]["title"].startswith("서브넷 만드는 법")
+    new_btn = [b for b in at.sidebar.button if b.label == "새 대화"][0]
+    new_btn.click().run()
+    assert len(at.session_state["conversations"]) == 2
+    assert at.session_state["conversations"][0]["messages"] == []
+    # 이전 대화로 전환
+    prev = [b for b in at.sidebar.button if b.label.startswith("서브넷 만드는 법")][0]
+    prev.click().run()
+    cur = next(c for c in at.session_state["conversations"] if c["id"] == at.session_state["current"])
+    assert len(cur["messages"]) == 2
+
+
+def test_empty_screen_mentions_conversations_are_session_only(app):
+    at, _ = app
+    at.run()
+    assert any("대화 목록은 브라우저 탭을 닫으면 사라집니다" in m.value for m in at.markdown)
