@@ -95,3 +95,12 @@ def test_url_slug_defaults_to_index_for_root():
 def test_disambiguate_inserts_slug_before_extension():
     rel = "Database/RDS for MySQL/API 가이드.html"
     assert disambiguate(rel, "api-guide-v3.0") == "Database/RDS for MySQL/API 가이드 (api-guide-v3.0).html"
+
+
+def test_disambiguate_without_extension_appends_slug():
+    assert disambiguate("Database/RDS for MySQL/API 가이드", "api-guide-v3.0") == \
+        "Database/RDS for MySQL/API 가이드 (api-guide-v3.0)"
+
+
+def test_disambiguate_uses_last_dot_only():
+    assert disambiguate("A/B/v1.2 가이드.html", "slug") == "A/B/v1.2 가이드 (slug).html"

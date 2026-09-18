@@ -115,3 +115,57 @@ def test_content_hash_is_deterministic_and_distinct():
 
 def test_now_iso_has_timezone():
     assert now_iso().endswith("+00:00")
+
+
+def test_load_recovers_from_backup_when_main_file_is_corrupt(tmp_path, capsys):
+    path = tmp_path / "manifest.json"
+    m = Manifest.load(str(path))
+    m.put(make_entry())
+    m.save()
+
+    # save() 는 제자리 쓰기 폴백에서만 .bak 을 남기므로 여기서는 직접 만든다.
+    (tmp_path / "manifest.json.bak").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    path.write_text('{"broken": ', encoding="utf-8")
+
+    recovered = Manifest.load(str(path))
+    assert recovered.get(make_entry().url) == make_entry()
+    out = capsys.readouterr().out
+    assert "깨졌습니다" in out and "복구" in out
+
+
+def test_load_starts_empty_when_both_main_and_backup_are_corrupt(tmp_path, capsys):
+    path = tmp_path / "manifest.json"
+    path.write_text('{"broken": ', encoding="utf-8")
+    (tmp_path / "manifest.json.bak").write_text("not json at all", encoding="utf-8")
+
+    m = Manifest.load(str(path))
+    assert m.entries == {}
+    assert "빈 목록으로 시작합니다" in capsys.readouterr().out
+
+
+def test_load_starts_empty_when_corrupt_and_no_backup(tmp_path):
+    path = tmp_path / "manifest.json"
+    path.write_text("{{{", encoding="utf-8")
+    assert Manifest.load(str(path)).entries == {}
+
+
+def test_in_place_fallback_writes_a_backup_first(tmp_path, monkeypatch):
+    """os.replace 가 계속 막혀 제자리로 덮어쓸 때, 직전 내용이 .bak 에 남는다."""
+    import crawlling.manifest as mod
+
+    path = tmp_path / "manifest.json"
+    m = Manifest.load(str(path))
+    m.put(make_entry())
+    m.save()                       # 정상 경로(os.replace)
+
+    monkeypatch.setattr(mod.os, "replace", lambda s, d: (_ for _ in ()).throw(PermissionError(5, "locked")))
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    m.put(make_entry(url="https://docs.nhncloud.com/ko/c/", path="C/D/e.html"))
+    m.save()                       # 제자리 쓰기 폴백
+
+    backup = tmp_path / "manifest.json.bak"
+    assert backup.exists()
+    # .bak 은 덮어쓰기 직전 내용 = 항목 1건
+    import json
+    assert len(json.loads(backup.read_text(encoding="utf-8"))) == 1
+    assert len(Manifest.load(str(path)).entries) == 2

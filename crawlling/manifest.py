@@ -7,6 +7,7 @@
 import hashlib
 import json
 import os
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -47,12 +48,40 @@ class Manifest:
         self.entries: dict[str, Entry] = {}
 
     @classmethod
+    def _read_into(cls, m: "Manifest", path: str) -> None:
+        with open(path, encoding="utf-8") as f:
+            for url, fields in json.load(f).items():
+                m.entries[url] = Entry(**fields)
+
+    @classmethod
     def load(cls, path: str) -> "Manifest":
+        """manifest.json 을 읽는다. 깨져 있으면 manifest.json.bak 을, 그것도 깨졌으면 빈 목록을.
+
+        제자리 덮어쓰기 폴백(아래 save 참고)은 원자적이지 않아 중간에 죽으면 파일이
+        깨질 수 있다. 그때 빈 manifest 로 시작하면 850쪽을 통째로 다시 받게 되므로
+        직전 사본(.bak)을 먼저 시도한다.
+        """
         m = cls(path)
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                for url, fields in json.load(f).items():
-                    m.entries[url] = Entry(**fields)
+        if not os.path.exists(path):
+            return m
+
+        try:
+            cls._read_into(m, path)
+            return m
+        except json.JSONDecodeError as e:
+            print(f"  [경고] {os.path.basename(path)} 가 깨졌습니다 ({e}). 직전 사본(.bak)으로 시도합니다.")
+
+        m.entries.clear()
+        backup = path + ".bak"
+        if os.path.exists(backup):
+            try:
+                cls._read_into(m, backup)
+                print(f"  [복구] {os.path.basename(backup)} 에서 {len(m.entries)}건을 읽었습니다.")
+                return m
+            except json.JSONDecodeError as e:
+                print(f"  [경고] 사본도 깨졌습니다 ({e}). 빈 목록으로 시작합니다.")
+
+        m.entries.clear()
         return m
 
     def save(self) -> None:
@@ -77,7 +106,14 @@ class Manifest:
         # os.replace 는 대상을 삭제/치환할 권한이 필요하지만, 이미 열려 있는
         # 파일이라도 내용을 그대로 덮어쓰는 것(같은 핸들 교체 없이)은 대개 허용된다.
         # 이 경로는 더 이상 원자적이지 않다: 덮어쓰는 도중 프로세스가 죽으면
-        # manifest.json 이 손상될 수 있다.
+        # manifest.json 이 손상될 수 있다. 그래서 덮어쓰기 직전에 현재 파일을
+        # manifest.json.bak 으로 복사해 둔다 (load 가 그걸로 복구한다).
+        if os.path.exists(self.path):
+            try:
+                shutil.copyfile(self.path, self.path + ".bak")
+            except OSError as e:
+                print(f"  [경고] manifest 사본(.bak) 생성 실패: {e}")
+
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
         try:

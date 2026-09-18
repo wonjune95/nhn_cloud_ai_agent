@@ -160,3 +160,61 @@ def test_recrawl_of_suffixed_url_with_force_keeps_same_suffixed_path(tmp_path, m
     assert result == "ok"
     assert manifest.get(url_v3).path == expected_path
     assert os.path.exists(os.path.join(save_dir, expected_path))
+
+
+def test_breadcrumb_change_moves_the_document_and_removes_the_old_copy(tmp_path, monkeypatch):
+    """같은 URL 의 브레드크럼이 바뀌면 옛 파일과 옛 images/<문서명>/ 을 지운다."""
+    url = "https://docs.nhncloud.com/ko/Compute/Instance/ko/console-guide/"
+    state = {"crumb": "Compute > Instance > 콘솔 사용 가이드"}
+
+    def fetch(driver, u, sleep):
+        return section_with_breadcrumb(state["crumb"])
+
+    def fake_download(section, doc_dir, page_url, doc_name, refresh=False):
+        img_dir = os.path.join(doc_dir, "images", doc_name)
+        os.makedirs(img_dir, exist_ok=True)
+        with open(os.path.join(img_dir, "s1.png"), "wb") as f:
+            f.write(b"png")
+        return 1, 0
+
+    monkeypatch.setattr(crawl, "fetch_section", fetch)
+    monkeypatch.setattr(crawl, "download_images", fake_download)
+
+    save_dir = str(tmp_path / "docs")
+    manifest = Manifest.load(os.path.join(save_dir, "manifest.json"))
+    task = {"category": "Compute", "name": "콘솔 사용 가이드", "url": url}
+
+    crawl.save_task(task, DummyDriver(), manifest, save_dir, make_args())
+    old_rel = manifest.get(url).path
+    assert old_rel == "Compute/Instance/콘솔 사용 가이드.html"
+    assert os.path.exists(os.path.join(save_dir, old_rel))
+    old_images = os.path.join(save_dir, "Compute/Instance/images/콘솔 사용 가이드")
+    assert os.path.isdir(old_images)
+
+    # 브레드크럼이 바뀐 채 강제로 다시 저장한다.
+    state["crumb"] = "Compute > Instance > 콘솔 사용 가이드 (신규)"
+    crawl.save_task(task, DummyDriver(), manifest, save_dir, make_args(force=True))
+
+    new_rel = manifest.get(url).path
+    assert new_rel == "Compute/Instance/콘솔 사용 가이드 (신규).html"
+    assert os.path.exists(os.path.join(save_dir, new_rel))
+    assert not os.path.exists(os.path.join(save_dir, old_rel))       # 옛 파일이 남지 않는다
+    assert not os.path.isdir(old_images)                             # 옛 이미지 폴더도 사라진다
+
+
+def test_unchanged_path_is_not_deleted_on_recrawl(tmp_path, monkeypatch):
+    """경로가 그대로면 아무것도 지우지 않는다 (덮어쓰기만)."""
+    url = "https://docs.nhncloud.com/ko/Compute/Instance/ko/console-guide/"
+    crumb = "Compute > Instance > 콘솔 사용 가이드"
+    monkeypatch.setattr(crawl, "fetch_section", lambda d, u, s: section_with_breadcrumb(crumb))
+    monkeypatch.setattr(crawl, "download_images", lambda *a, **k: (0, 0))
+
+    save_dir = str(tmp_path / "docs")
+    manifest = Manifest.load(os.path.join(save_dir, "manifest.json"))
+    task = {"category": "Compute", "name": "콘솔 사용 가이드", "url": url}
+
+    crawl.save_task(task, DummyDriver(), manifest, save_dir, make_args())
+    crawl.save_task(task, DummyDriver(), manifest, save_dir, make_args(force=True))
+
+    rel = manifest.get(url).path
+    assert os.path.exists(os.path.join(save_dir, rel))

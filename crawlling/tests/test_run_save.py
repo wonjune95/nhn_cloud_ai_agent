@@ -5,6 +5,8 @@ run() 은 매 페이지 저장(skip 제외)과는 별도로, 루프가 끝난 �
 manifest.save() 를 한 번 더(무조건) 호출해 지속되는 저장 실패를 드러낸다.
 """
 
+import os
+
 from crawlling import crawl
 
 
@@ -93,3 +95,54 @@ def test_run_continues_after_a_save_failure(tmp_path, monkeypatch, capsys):
     assert "[1/2] A > a → ok" in out
     assert "[2/2] B > b → ok" in out
     assert "[경고] manifest 저장 실패" in out
+
+
+def test_error_keeps_previous_good_entry_and_only_records_the_error(tmp_path, monkeypatch):
+    """이전에 제대로 받아 둔 기록이 있으면 실패해도 경로·해시·상태를 지킨다."""
+    from crawlling.manifest import STATUS_OK, Entry
+
+    url = FAKE_TASKS[0]["url"]
+    monkeypatch.setattr(crawl, "build_driver", lambda: DummyDriver())
+    monkeypatch.setattr(crawl, "discover", lambda driver: [dict(FAKE_TASKS[0])])
+
+    def boom(task, driver, manifest, save_dir, args):
+        raise RuntimeError("본문(section.page__content-wrapper) 없음")
+
+    monkeypatch.setattr(crawl, "save_task", boom)
+
+    args = make_args(tmp_path)
+    manifest_path = os.path.join(args.save_dir, "manifest.json")
+    os.makedirs(args.save_dir, exist_ok=True)
+    seed = crawl.Manifest(manifest_path)
+    seed.put(Entry(url=url, path="A/_/a.html", breadcrumb=["A", "a"],
+                   fetched_at="2026-09-17T00:00:00+00:00", content_hash="abc",
+                   image_count=3, status=STATUS_OK))
+    seed.save()
+
+    crawl.run(args)
+
+    entry = crawl.Manifest.load(manifest_path).get(url)
+    assert entry.path == "A/_/a.html"
+    assert entry.breadcrumb == ["A", "a"]
+    assert entry.content_hash == "abc"
+    assert entry.image_count == 3
+    assert entry.status == STATUS_OK           # error 로 덮어쓰지 않는다
+    assert "본문" in entry.error
+
+
+def test_error_without_previous_entry_creates_an_error_entry(tmp_path, monkeypatch):
+    from crawlling.manifest import STATUS_ERROR
+
+    url = FAKE_TASKS[0]["url"]
+    monkeypatch.setattr(crawl, "build_driver", lambda: DummyDriver())
+    monkeypatch.setattr(crawl, "discover", lambda driver: [dict(FAKE_TASKS[0])])
+    monkeypatch.setattr(crawl, "save_task",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("timeout")))
+
+    args = make_args(tmp_path)
+    crawl.run(args)
+
+    entry = crawl.Manifest.load(os.path.join(args.save_dir, "manifest.json")).get(url)
+    assert entry.status == STATUS_ERROR
+    assert entry.path == ""
+    assert entry.error == "timeout"

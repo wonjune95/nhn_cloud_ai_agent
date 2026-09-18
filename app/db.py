@@ -4,8 +4,27 @@ import psycopg2
 
 # 컨테이너 안에서는 서비스명 "db", 호스트(윈도우)에서 직접 돌릴 때는
 # DB_HOST=localhost 로 덮어쓴다. 5432 는 compose 에서 이미 공개돼 있다.
+DEFAULT_DB_PORT = 5432
+
+
+def _port(raw: str | None) -> int:
+    """DB_PORT 를 너그럽게 읽는다.
+
+    쿠버네티스는 이름이 'db' 인 Service 가 있으면 DB_PORT=tcp://10.x.x.x:5432 를
+    자동 주입한다(enableServiceLinks: false 로 막아 두었지만, 매니페스트 하나가
+    빠지면 다시 새어 들어온다). 숫자가 아니면 기본 포트로 되돌린다.
+    """
+    if raw is None:
+        return DEFAULT_DB_PORT
+    try:
+        return int(raw.strip())
+    except (AttributeError, ValueError):
+        print(f"  [경고] DB_PORT={raw!r} 를 숫자로 읽을 수 없어 {DEFAULT_DB_PORT} 를 씁니다.")
+        return DEFAULT_DB_PORT
+
+
 DB_HOST = os.getenv("DB_HOST", "db")
-DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_PORT = _port(os.getenv("DB_PORT"))
 DB_NAME = os.getenv("DB_NAME", "ragdb")
 DB_USER = os.getenv("DB_USER", "devops")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "devops")

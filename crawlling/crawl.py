@@ -14,8 +14,10 @@
 import argparse
 import hashlib
 import os
+import shutil
 import sys
 import time
+from dataclasses import replace
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -148,6 +150,24 @@ def download_images(section, doc_dir: str, page_url: str, doc_name: str, refresh
     return ok, missing
 
 
+def _remove_old_document(save_dir: str, old_rel: str) -> None:
+    """브레드크럼이 바뀌어 저장 경로가 옮겨갈 때, 옛 파일과 그 이미지 폴더를 지운다.
+
+    지우지 않으면 같은 페이지가 두 경로에 남아 ingest 가 중복 청크를 만든다.
+    실패는 무시한다 — 정리는 실패해도 크롤 자체는 계속해야 한다.
+    """
+    old_path = os.path.join(save_dir, old_rel)
+    try:
+        os.remove(old_path)
+    except OSError:
+        pass
+
+    old_images = os.path.join(
+        os.path.dirname(old_path), "images", os.path.splitext(os.path.basename(old_rel))[0]
+    )
+    shutil.rmtree(old_images, ignore_errors=True)
+
+
 def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> str:
     """페이지 하나를 저장하고 manifest 에 기록한다. 결과 상태 문자열을 돌려준다."""
     prev = manifest.get(task["url"])
@@ -180,6 +200,9 @@ def save_task(task: dict, driver, manifest: Manifest, save_dir: str, args) -> st
     owner = manifest.by_path().get(rel)
     if owner is not None and owner.url != task["url"] and owner.status in (STATUS_OK, STATUS_NO_BREADCRUMB):
         rel = disambiguate(rel, url_slug(task["url"]))
+
+    if prev is not None and prev.path and prev.path != rel:
+        _remove_old_document(save_dir, prev.path)
 
     doc_dir = os.path.join(save_dir, os.path.dirname(rel))
     os.makedirs(doc_dir, exist_ok=True)
@@ -218,11 +241,17 @@ def run(args) -> int:
                 result = save_task(task, driver, manifest, save_dir, args)
             except Exception as e:
                 prev = manifest.get(task["url"])
-                manifest.put(Entry(
-                    url=task["url"], path=prev.path if prev else "", breadcrumb=[],
-                    fetched_at=now_iso(), content_hash="", image_count=0,
-                    status=STATUS_ERROR, error=str(e)[:200],
-                ))
+                if prev is not None:
+                    # 이전에 제대로 받아 둔 기록이 있으면 그 내용(경로·해시·상태)을 지키고
+                    # 오류 메시지만 덧붙인다. status 를 error 로 덮으면 다음 실행이 이미
+                    # 멀쩡히 있는 문서를 다시 받고, ingest 는 원본 URL 을 잃는다.
+                    manifest.put(replace(prev, fetched_at=now_iso(), error=str(e)[:200]))
+                else:
+                    manifest.put(Entry(
+                        url=task["url"], path="", breadcrumb=[],
+                        fetched_at=now_iso(), content_hash="", image_count=0,
+                        status=STATUS_ERROR, error=str(e)[:200],
+                    ))
                 result = STATUS_ERROR
                 print(f"{label} 실패: {e}")
             else:

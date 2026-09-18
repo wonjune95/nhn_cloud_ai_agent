@@ -79,6 +79,13 @@ def url_slug(url: str) -> str:
 
 
 def disambiguate(rel_path: str, slug: str) -> str:
-    """'A/B/문서.html' + 'api-guide-v3.0' -> 'A/B/문서 (api-guide-v3.0).html'"""
+    """'A/B/문서.html' + 'api-guide-v3.0' -> 'A/B/문서 (api-guide-v3.0).html'
+
+    확장자가 없는 경로면(점이 없으면) 끝에 ' (slug)' 만 붙인다 — rsplit('.') 이
+    ValueError 를 내며 크롤을 통째로 멈추지 않게.
+    """
+    if "." not in rel_path:
+        return f"{rel_path} ({slug})"
+
     root, ext = rel_path.rsplit(".", 1)
     return f"{root} ({slug}).{ext}"
