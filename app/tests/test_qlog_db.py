@@ -101,3 +101,32 @@ def test_log_failures_do_not_raise(monkeypatch, capsys):
                              grounded=True, elapsed_ms=1, sources=[], answer="a") is None
     assert qlog.set_feedback(1, 1) is False
     assert "질문 로그" in capsys.readouterr().err
+
+
+def test_log_question_closes_connection_when_execute_fails(schema, monkeypatch):
+    """cursor()/execute 가 실 연결을 얻은 뒤 실패해도 그 연결은 닫혀야 한다 (연결 누수 방지)."""
+    import qlog
+    from db import get_conn as real_get_conn
+
+    class FailingConn:
+        """실 연결을 감싸되 cursor() 에서 터진다. close() 호출 여부만 기록한다."""
+
+        def __init__(self, real):
+            self._real = real
+            self.closed = False
+
+        def cursor(self):
+            raise RuntimeError("cursor 실패")
+
+        def close(self):
+            self.closed = True
+            self._real.close()
+
+    wrapper = FailingConn(real_get_conn())
+    monkeypatch.setattr(qlog, "get_conn", lambda: wrapper)
+
+    result = qlog.log_question(session_id="s", question="q", retrieval_query="q", service=None,
+                                intent="general", grounded=True, elapsed_ms=1, sources=[], answer="a")
+
+    assert result is None
+    assert wrapper.closed is True

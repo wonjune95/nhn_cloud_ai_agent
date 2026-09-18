@@ -20,7 +20,8 @@ def sources_of(cands) -> list[dict]:
 
 def log_question(*, session_id, question, retrieval_query, service, intent, grounded,
                  elapsed_ms, sources, answer, error=None) -> int | None:
-    """한 행을 넣고 id 를 돌려준다. 실패하면 None."""
+    """한 행을 넣고 id 를 돌려준다. 실패하면 None. 연결은 성공·실패 어느 쪽이든 닫는다."""
+    conn = None
     try:
         conn = get_conn()
         cur = conn.cursor()
@@ -33,23 +34,28 @@ def log_question(*, session_id, question, retrieval_query, service, intent, grou
         qid = cur.fetchone()[0]
         conn.commit()
         cur.close()
-        conn.close()
         return qid
     except Exception as e:
         print(f"  [질문 로그 실패] {type(e).__name__}: {e}", file=sys.stderr)
         return None
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def set_feedback(question_id: int, value: int) -> bool:
-    """feedback 을 +1/-1 로 갱신한다. 실패하면 False."""
+    """feedback 을 +1/-1 로 갱신한다. 실패하면 False. 연결은 성공·실패 어느 쪽이든 닫는다."""
+    conn = None
     try:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("UPDATE questions SET feedback = %s WHERE id = %s", (value, question_id))
         conn.commit()
         cur.close()
-        conn.close()
         return True
     except Exception as e:
         print(f"  [질문 로그 실패] 피드백 저장: {type(e).__name__}: {e}", file=sys.stderr)
         return False
+    finally:
+        if conn is not None:
+            conn.close()
